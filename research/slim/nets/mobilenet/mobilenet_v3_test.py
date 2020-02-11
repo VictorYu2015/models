@@ -78,5 +78,24 @@ class MobilenetV3Test(absltest.TestCase):
                      [None, None, None, 960])
     self.assertEqual(result, endpoints['layer_17'])
 
+  # Use reduce mean for pooling and check for operation 'ReduceMean' in graph
+  def testMobilenetV3WithReduceMean(self):
+    _, _ = mobilenet_v3.mobilenet(
+        tf.compat.v1.placeholder(tf.float32, (1, 224, 224, 3)),
+        conv_defs=mobilenet_v3.V3_SMALL,
+        use_reduce_mean_for_pooling=True)
+    g = tf.get_default_graph()
+    reduce_mean = [v for v in g.get_operations() if 'ReduceMean' in v.name]
+    self.assertNotEmpty(reduce_mean)
+
+  def testMobilenetV3WithOutReduceMean(self):
+    _, _ = mobilenet_v3.mobilenet(
+        tf.compat.v1.placeholder(tf.float32, (1, 224, 224, 3)),
+        conv_defs=mobilenet_v3.V3_SMALL,
+        use_reduce_mean_for_pooling=False)
+    g = tf.get_default_graph()
+    reduce_mean = [v for v in g.get_operations() if 'ReduceMean' in v.name]
+    self.assertEmpty(reduce_mean)
+
 if __name__ == '__main__':
   absltest.main()
