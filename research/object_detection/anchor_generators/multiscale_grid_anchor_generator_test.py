@@ -125,11 +125,15 @@ class MultiscaleGridAnchorGeneratorTest(test_case.TestCase):
     im_height = tf.constant(64)
     im_width = tf.constant(64)
     feature_map_shape_list = [(2, 2)]
-    # Zero offsets are used.
     exp_anchor_corners = [[-64, -64, 64, 64],
                           [-64, -32, 64, 96],
                           [-32, -64, 96, 64],
                           [-32, -32, 96, 96]]
+    # Add anchor offset.
+    anchor_offset = 2.0**min_level / 2.0
+    exp_anchor_corners = [
+        [b + anchor_offset for b in a] for a in exp_anchor_corners
+    ]
 
     anchor_generator = mg.MultiscaleGridAnchorGenerator(
         min_level, max_level, anchor_scale, aspect_ratios, scales_per_octave,

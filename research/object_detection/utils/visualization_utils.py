@@ -202,8 +202,11 @@ def draw_bounding_box_on_image(image,
                                   ymin * im_height, ymax * im_height)
   else:
     (left, right, top, bottom) = (xmin, xmax, ymin, ymax)
-  draw.line([(left, top), (left, bottom), (right, bottom),
-             (right, top), (left, top)], width=thickness, fill=color)
+  if thickness > 0:
+    draw.line([(left, top), (left, bottom), (right, bottom), (right, top),
+               (left, top)],
+              width=thickness,
+              fill=color)
   try:
     font = ImageFont.truetype('arial.ttf', 24)
   except IOError:
@@ -299,8 +302,10 @@ def draw_bounding_boxes_on_image(image,
                                boxes[i, 3], color, thickness, display_str_list)
 
 
-def create_visualization_fn(category_index, include_masks=False,
-                            include_keypoints=False, include_track_ids=False,
+def create_visualization_fn(category_index,
+                            include_masks=False,
+                            include_keypoints=False,
+                            include_track_ids=False,
                             **kwargs):
   """Constructs a visualization function that can be wrapped in a py_func.
 
@@ -412,6 +417,7 @@ def draw_bounding_boxes_on_image_tensors(images,
                                          true_image_shape=None,
                                          instance_masks=None,
                                          keypoints=None,
+                                         keypoint_edges=None,
                                          track_ids=None,
                                          max_boxes_to_draw=20,
                                          min_score_thresh=0.2,
@@ -436,6 +442,9 @@ def draw_bounding_boxes_on_image_tensors(images,
       instance masks.
     keypoints: A 4D float32 tensor of shape [N, max_detection, num_keypoints, 2]
       with keypoints.
+    keypoint_edges: A list of tuples with keypoint indices that specify which
+      keypoints should be connected by an edge, e.g. [(0, 1), (2, 4)] draws
+      edges from keypoint 0 to 1 and from keypoint 2 to 4.
     track_ids: [N, max_detections] int32 tensor of unique tracks ids (i.e.
       instance ids for each object). If provided, the color-coding of boxes is
       dictated by these ids, and not classes.
@@ -458,7 +467,8 @@ def draw_bounding_boxes_on_image_tensors(images,
       'max_boxes_to_draw': max_boxes_to_draw,
       'min_score_thresh': min_score_thresh,
       'agnostic_mode': False,
-      'line_thickness': 4
+      'line_thickness': 4,
+      'keypoint_edges': keypoint_edges
   }
   if true_image_shape is None:
     true_shapes = tf.constant(-1, shape=[images.shape.as_list()[0], 3])
@@ -506,7 +516,8 @@ def draw_side_by_side_evaluation_image(eval_dict,
                                        category_index,
                                        max_boxes_to_draw=20,
                                        min_score_thresh=0.2,
-                                       use_normalized_coordinates=True):
+                                       use_normalized_coordinates=True,
+                                       keypoint_edges=None):
   """Creates a side-by-side image with detections and groundtruth.
 
   Bounding boxes (and instance masks, if available) are visualized on both
@@ -519,9 +530,12 @@ def draw_side_by_side_evaluation_image(eval_dict,
     category_index: A category index (dictionary) produced from a labelmap.
     max_boxes_to_draw: The maximum number of boxes to draw for detections.
     min_score_thresh: The minimum score threshold for showing detections.
-    use_normalized_coordinates: Whether to assume boxes and kepoints are in
-      normalized coordinates (as opposed to absolute coordiantes).
+    use_normalized_coordinates: Whether to assume boxes and keypoints are in
+      normalized coordinates (as opposed to absolute coordinates).
       Default is True.
+    keypoint_edges: A list of tuples with keypoint indices that specify which
+      keypoints should be connected by an edge, e.g. [(0, 1), (2, 4)] draws
+      edges from keypoint 0 to 1 and from keypoint 2 to 4.
 
   Returns:
     A list of [1, H, 2 * W, C] uint8 tensor. The subimage on the left
@@ -574,6 +588,7 @@ def draw_side_by_side_evaluation_image(eval_dict,
             eval_dict[input_data_fields.true_image_shape][indx], axis=0),
         instance_masks=instance_masks,
         keypoints=keypoints,
+        keypoint_edges=keypoint_edges,
         max_boxes_to_draw=max_boxes_to_draw,
         min_score_thresh=min_score_thresh,
         use_normalized_coordinates=use_normalized_coordinates)
@@ -597,6 +612,7 @@ def draw_side_by_side_evaluation_image(eval_dict,
             eval_dict[input_data_fields.true_image_shape][indx], axis=0),
         instance_masks=groundtruth_instance_masks,
         keypoints=None,
+        keypoint_edges=None,
         max_boxes_to_draw=None,
         min_score_thresh=0.0,
         use_normalized_coordinates=use_normalized_coordinates)
@@ -628,6 +644,7 @@ def draw_side_by_side_evaluation_image(eval_dict,
                   eval_dict[input_data_fields.true_image_shape][indx], axis=0),
               instance_masks=groundtruth_instance_masks,
               keypoints=None,
+              keypoint_edges=None,
               max_boxes_to_draw=None,
               min_score_thresh=0.0,
               use_normalized_coordinates=use_normalized_coordinates))
@@ -643,7 +660,10 @@ def draw_keypoints_on_image_array(image,
                                   keypoints,
                                   color='red',
                                   radius=2,
-                                  use_normalized_coordinates=True):
+                                  use_normalized_coordinates=True,
+                                  keypoint_edges=None,
+                                  keypoint_edge_color='green',
+                                  keypoint_edge_width=2):
   """Draws keypoints on an image (numpy array).
 
   Args:
@@ -653,10 +673,17 @@ def draw_keypoints_on_image_array(image,
     radius: keypoint radius. Default value is 2.
     use_normalized_coordinates: if True (default), treat keypoint values as
       relative to the image.  Otherwise treat them as absolute.
+    keypoint_edges: A list of tuples with keypoint indices that specify which
+      keypoints should be connected by an edge, e.g. [(0, 1), (2, 4)] draws
+      edges from keypoint 0 to 1 and from keypoint 2 to 4.
+    keypoint_edge_color: color to draw the keypoint edges with. Default is red.
+    keypoint_edge_width: width of the edges drawn between keypoints. Default
+      value is 2.
   """
   image_pil = Image.fromarray(np.uint8(image)).convert('RGB')
   draw_keypoints_on_image(image_pil, keypoints, color, radius,
-                          use_normalized_coordinates)
+                          use_normalized_coordinates, keypoint_edges,
+                          keypoint_edge_color, keypoint_edge_width)
   np.copyto(image, np.array(image_pil))
 
 
@@ -664,7 +691,10 @@ def draw_keypoints_on_image(image,
                             keypoints,
                             color='red',
                             radius=2,
-                            use_normalized_coordinates=True):
+                            use_normalized_coordinates=True,
+                            keypoint_edges=None,
+                            keypoint_edge_color='green',
+                            keypoint_edge_width=2):
   """Draws keypoints on an image.
 
   Args:
@@ -674,6 +704,12 @@ def draw_keypoints_on_image(image,
     radius: keypoint radius. Default value is 2.
     use_normalized_coordinates: if True (default), treat keypoint values as
       relative to the image.  Otherwise treat them as absolute.
+    keypoint_edges: A list of tuples with keypoint indices that specify which
+      keypoints should be connected by an edge, e.g. [(0, 1), (2, 4)] draws
+      edges from keypoint 0 to 1 and from keypoint 2 to 4.
+    keypoint_edge_color: color to draw the keypoint edges with. Default is red.
+    keypoint_edge_width: width of the edges drawn between keypoints. Default
+      value is 2.
   """
   draw = ImageDraw.Draw(image)
   im_width, im_height = image.size
@@ -686,6 +722,17 @@ def draw_keypoints_on_image(image,
     draw.ellipse([(keypoint_x - radius, keypoint_y - radius),
                   (keypoint_x + radius, keypoint_y + radius)],
                  outline=color, fill=color)
+  if keypoint_edges is not None:
+    for keypoint_start, keypoint_end in keypoint_edges:
+      if (keypoint_start < 0 or keypoint_start >= len(keypoints) or
+          keypoint_end < 0 or keypoint_end >= len(keypoints)):
+        continue
+      edge_coordinates = [
+          keypoints_x[keypoint_start], keypoints_y[keypoint_start],
+          keypoints_x[keypoint_end], keypoints_y[keypoint_end]
+      ]
+      draw.line(
+          edge_coordinates, fill=keypoint_edge_color, width=keypoint_edge_width)
 
 
 def draw_mask_on_image_array(image, mask, color='red', alpha=0.4):
@@ -730,6 +777,7 @@ def visualize_boxes_and_labels_on_image_array(
     instance_masks=None,
     instance_boundaries=None,
     keypoints=None,
+    keypoint_edges=None,
     track_ids=None,
     use_normalized_coordinates=False,
     max_boxes_to_draw=20,
@@ -737,6 +785,7 @@ def visualize_boxes_and_labels_on_image_array(
     agnostic_mode=False,
     line_thickness=4,
     groundtruth_box_visualization_color='black',
+    skip_boxes=False,
     skip_scores=False,
     skip_labels=False,
     skip_track_ids=False):
@@ -763,6 +812,9 @@ def visualize_boxes_and_labels_on_image_array(
       with values ranging between 0 and 1, can be None.
     keypoints: a numpy array of shape [N, num_keypoints, 2], can
       be None
+    keypoint_edges: A list of tuples with keypoint indices that specify which
+      keypoints should be connected by an edge, e.g. [(0, 1), (2, 4)] draws
+      edges from keypoint 0 to 1 and from keypoint 2 to 4.
     track_ids: a numpy array of shape [N] with unique track ids. If provided,
       color-coding of boxes will be determined by these ids, and not the class
       indices.
@@ -777,6 +829,7 @@ def visualize_boxes_and_labels_on_image_array(
     line_thickness: integer (default: 4) controlling line width of the boxes.
     groundtruth_box_visualization_color: box color for visualizing groundtruth
       boxes
+    skip_boxes: whether to skip the drawing of bounding boxes.
     skip_scores: whether to skip score when drawing a single detection
     skip_labels: whether to skip label when drawing a single detection
     skip_track_ids: whether to skip track id when drawing a single detection
@@ -794,7 +847,9 @@ def visualize_boxes_and_labels_on_image_array(
   box_to_track_ids_map = {}
   if not max_boxes_to_draw:
     max_boxes_to_draw = boxes.shape[0]
-  for i in range(min(max_boxes_to_draw, boxes.shape[0])):
+  for i in range(boxes.shape[0]):
+    if max_boxes_to_draw == len(box_to_color_map):
+      break
     if scores is None or scores[i] > min_score_thresh:
       box = tuple(boxes[i].tolist())
       if instance_masks is not None:
@@ -860,7 +915,7 @@ def visualize_boxes_and_labels_on_image_array(
         ymax,
         xmax,
         color=color,
-        thickness=line_thickness,
+        thickness=0 if skip_boxes else line_thickness,
         display_str_list=box_to_display_str_map[box],
         use_normalized_coordinates=use_normalized_coordinates)
     if keypoints is not None:
@@ -869,7 +924,10 @@ def visualize_boxes_and_labels_on_image_array(
           box_to_keypoints_map[box],
           color=color,
           radius=line_thickness / 2,
-          use_normalized_coordinates=use_normalized_coordinates)
+          use_normalized_coordinates=use_normalized_coordinates,
+          keypoint_edges=keypoint_edges,
+          keypoint_edge_color=color,
+          keypoint_edge_width=line_thickness // 2)
 
   return image
 
@@ -950,7 +1008,8 @@ class EvalMetricOpsVisualization(six.with_metaclass(abc.ABCMeta, object)):
                max_boxes_to_draw=20,
                min_score_thresh=0.2,
                use_normalized_coordinates=True,
-               summary_name_prefix='evaluation_image'):
+               summary_name_prefix='evaluation_image',
+               keypoint_edges=None):
     """Creates an EvalMetricOpsVisualization.
 
     Args:
@@ -958,10 +1017,13 @@ class EvalMetricOpsVisualization(six.with_metaclass(abc.ABCMeta, object)):
       max_examples_to_draw: The maximum number of example summaries to produce.
       max_boxes_to_draw: The maximum number of boxes to draw for detections.
       min_score_thresh: The minimum score threshold for showing detections.
-      use_normalized_coordinates: Whether to assume boxes and kepoints are in
-        normalized coordinates (as opposed to absolute coordiantes).
+      use_normalized_coordinates: Whether to assume boxes and keypoints are in
+        normalized coordinates (as opposed to absolute coordinates).
         Default is True.
       summary_name_prefix: A string prefix for each image summary.
+      keypoint_edges: A list of tuples with keypoint indices that specify which
+        keypoints should be connected by an edge, e.g. [(0, 1), (2, 4)] draws
+        edges from keypoint 0 to 1 and from keypoint 2 to 4.
     """
 
     self._category_index = category_index
@@ -970,6 +1032,7 @@ class EvalMetricOpsVisualization(six.with_metaclass(abc.ABCMeta, object)):
     self._min_score_thresh = min_score_thresh
     self._use_normalized_coordinates = use_normalized_coordinates
     self._summary_name_prefix = summary_name_prefix
+    self._keypoint_edges = keypoint_edges
     self._images = []
 
   def clear(self):
@@ -1083,16 +1146,20 @@ class VisualizeSingleFrameDetections(EvalMetricOpsVisualization):
                max_boxes_to_draw=20,
                min_score_thresh=0.2,
                use_normalized_coordinates=True,
-               summary_name_prefix='Detections_Left_Groundtruth_Right'):
+               summary_name_prefix='Detections_Left_Groundtruth_Right',
+               keypoint_edges=None):
     super(VisualizeSingleFrameDetections, self).__init__(
         category_index=category_index,
         max_examples_to_draw=max_examples_to_draw,
         max_boxes_to_draw=max_boxes_to_draw,
         min_score_thresh=min_score_thresh,
         use_normalized_coordinates=use_normalized_coordinates,
-        summary_name_prefix=summary_name_prefix)
+        summary_name_prefix=summary_name_prefix,
+        keypoint_edges=keypoint_edges)
 
   def images_from_evaluation_dict(self, eval_dict):
-    return draw_side_by_side_evaluation_image(
-        eval_dict, self._category_index, self._max_boxes_to_draw,
-        self._min_score_thresh, self._use_normalized_coordinates)
+    return draw_side_by_side_evaluation_image(eval_dict, self._category_index,
+                                              self._max_boxes_to_draw,
+                                              self._min_score_thresh,
+                                              self._use_normalized_coordinates,
+                                              self._keypoint_edges)

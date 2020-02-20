@@ -3184,6 +3184,50 @@ class PreprocessorTest(tf.test.TestCase, parameterized.TestCase):
     with self.assertRaises(ValueError):
       preprocessor.resize_to_min_dimension(image, 500)
 
+  def testResizePadToMultipleNoMasks(self):
+    """Tests resizing when padding to multiple without masks."""
+
+    image = tf.ones((200, 100, 3), dtype=tf.float32)
+    out_image, out_shape = preprocessor.resize_pad_to_multiple(
+        image, multiple=32)
+
+    with self.test_session() as sess:
+      out_image, out_shape = sess.run([out_image, out_shape])
+      self.assertAllClose(out_image.sum(), 200 * 100 * 3)
+      self.assertEqual(out_shape, (200, 100, 3))
+      self.assertEqual(out_image.shape, (224, 128, 3))
+
+  def testResizePadToMultipleWithMasks(self):
+    """Tests resizing when padding to multiple with masks."""
+
+    image = tf.ones((200, 100, 3), dtype=tf.float32)
+    masks = tf.ones((10, 200, 100), dtype=tf.float32)
+
+    _, out_masks, out_shape = preprocessor.resize_pad_to_multiple(
+        image, multiple=32, masks=masks)
+
+    with self.test_session() as sess:
+      out_masks, out_shape = sess.run(
+          [out_masks, out_shape])
+      self.assertAllClose(out_masks.sum(), 200 * 100 * 10)
+      self.assertEqual(out_shape, (200, 100, 3))
+      self.assertEqual(out_masks.shape, (10, 224, 128))
+
+  def testResizePadToMultipleEmptyMasks(self):
+    """Tests resizing when padding to multiple with an empty mask."""
+
+    image = tf.ones((200, 100, 3), dtype=tf.float32)
+    masks = tf.ones((0, 200, 100), dtype=tf.float32)
+
+    _, out_masks, out_shape = preprocessor.resize_pad_to_multiple(
+        image, multiple=32, masks=masks)
+
+    with self.test_session() as sess:
+      out_masks, out_shape = sess.run(
+          [out_masks, out_shape])
+      self.assertEqual(out_shape, (200, 100, 3))
+      self.assertEqual(out_masks.shape, (0, 224, 128))
+
   def testScaleBoxesToPixelCoordinates(self):
     """Tests box scaling, checking scaled values."""
     in_shape = [60, 40, 3]

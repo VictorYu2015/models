@@ -280,3 +280,35 @@ def rot90(keypoints, scope=None):
     new_keypoints = tf.concat([v, u], 2)
     new_keypoints = tf.transpose(new_keypoints, [1, 0, 2])
     return new_keypoints
+
+
+def keypoint_weights_from_visibilities(keypoint_visibilities,
+                                       per_keypoint_weights=None):
+  """Returns a keypoint weights tensor.
+
+  During training, it is often beneficial to consider only those keypoints that
+  are labeled. This function returns a weights tensor that combines default
+  per-keypoint weights, as well as the visibilities of individual keypoints.
+
+  The returned tensor satisfies:
+  keypoint_weights[i, k] = per_keypoint_weights[k] * keypoint_visibilities[i, k]
+  where per_keypoint_weights[k] is set to 1 if not provided.
+
+  Args:
+    keypoint_visibilities: A [num_instances, num_keypoints] boolean tensor
+      indicating whether a keypoint is labeled (and perhaps even visible).
+    per_keypoint_weights: A list or 1-d tensor of length `num_keypoints` with
+      per-keypoint weights. If None, will use 1 for each visible keypoint
+      weight.
+
+  Returns:
+    A [num_instances, num_keypoints] float32 tensor with keypoint weights. Those
+    keypoints deemed visible will have the provided per-keypoint weight, and
+    all others will be set to zero.
+  """
+  if per_keypoint_weights is None:
+    num_keypoints = keypoint_visibilities.shape.as_list()[1]
+    per_keypoint_weight_mult = tf.ones((1, num_keypoints,), dtype=tf.float32)
+  else:
+    per_keypoint_weight_mult = tf.expand_dims(per_keypoint_weights, axis=0)
+  return per_keypoint_weight_mult * tf.cast(keypoint_visibilities, tf.float32)

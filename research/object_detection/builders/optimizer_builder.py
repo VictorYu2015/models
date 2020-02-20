@@ -18,6 +18,7 @@
 import tensorflow as tf
 
 
+from tensorflow.contrib import opt as tf_opt
 from object_detection.utils import learning_schedules
 
 
@@ -71,7 +72,7 @@ def build_optimizers_tf_v1(optimizer_config, global_step=None):
     raise ValueError('Optimizer %s not supported.' % optimizer_type)
 
   if optimizer_config.use_moving_average:
-    optimizer = tf.contrib.opt.MovingAverageOptimizer(
+    optimizer = tf_opt.MovingAverageOptimizer(
         optimizer, average_decay=optimizer_config.moving_average_decay)
 
   return optimizer, summary_vars

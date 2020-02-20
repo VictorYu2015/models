@@ -133,8 +133,21 @@ def build(image_resizer_config):
           'Invalid image resizer condition option for '
           'ConditionalShapeResizer: \'%s\'.'
           % conditional_shape_resize_config.condition)
-
     if not conditional_shape_resize_config.convert_to_grayscale:
+      return image_resizer_fn
+  elif image_resizer_oneof == 'pad_to_multiple_resizer':
+    pad_to_multiple_resizer_config = (
+        image_resizer_config.pad_to_multiple_resizer)
+
+    if pad_to_multiple_resizer_config.multiple < 0:
+      raise ValueError('`multiple` for pad_to_multiple_resizer should be > 0.')
+
+    else:
+      image_resizer_fn = functools.partial(
+          preprocessor.resize_pad_to_multiple,
+          multiple=pad_to_multiple_resizer_config.multiple)
+
+    if not pad_to_multiple_resizer_config.convert_to_grayscale:
       return image_resizer_fn
   else:
     raise ValueError(

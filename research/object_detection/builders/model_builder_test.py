@@ -1,3 +1,4 @@
+# Lint as: python2, python3
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -12,7 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-
 """Tests for object_detection.models.model_builder."""
 
 from absl.testing import parameterized
@@ -21,6 +21,7 @@ import tensorflow as tf
 
 from google.protobuf import text_format
 from object_detection.builders import model_builder
+from object_detection.core import losses
 from object_detection.meta_architectures import faster_rcnn_meta_arch
 from object_detection.meta_architectures import rfcn_meta_arch
 from object_detection.meta_architectures import ssd_meta_arch
@@ -238,8 +239,9 @@ class ModelBuilderTest(tf.test.TestCase, parameterized.TestCase):
           'enable_mask_prediction': False
       },
   )
-  def test_create_faster_rcnn_models_from_config(
-      self, use_matmul_crop_and_resize, enable_mask_prediction):
+  def test_create_faster_rcnn_models_from_config(self,
+                                                 use_matmul_crop_and_resize,
+                                                 enable_mask_prediction):
     model_proto = self.create_default_faster_rcnn_model_proto()
     faster_rcnn_config = model_proto.faster_rcnn
     faster_rcnn_config.use_matmul_crop_and_resize = use_matmul_crop_and_resize
@@ -276,46 +278,55 @@ class ModelBuilderTest(tf.test.TestCase, parameterized.TestCase):
       self.assertIsInstance(model, rfcn_meta_arch.RFCNMetaArch)
       self.assertIsInstance(model._feature_extractor, extractor_class)
 
+
+  @parameterized.parameters(True, False)
+  def test_create_faster_rcnn_from_config_with_crop_feature(
+      self, output_final_box_features):
+    model_proto = self.create_default_faster_rcnn_model_proto()
+    model_proto.faster_rcnn.output_final_box_features = (
+        output_final_box_features)
+    _ = model_builder.build(model_proto, is_training=True)
+
   def test_invalid_model_config_proto(self):
     model_proto = ''
-    with self.assertRaisesRegexp(
+    with self.assertRaisesRegex(
         ValueError, 'model_config not of type model_pb2.DetectionModel.'):
       model_builder.build(model_proto, is_training=True)
 
   def test_unknown_meta_architecture(self):
     model_proto = model_pb2.DetectionModel()
-    with self.assertRaisesRegexp(ValueError, 'Unknown meta architecture'):
+    with self.assertRaisesRegex(ValueError, 'Unknown meta architecture'):
       model_builder.build(model_proto, is_training=True)
 
   def test_unknown_ssd_feature_extractor(self):
     model_proto = self.create_default_ssd_model_proto()
     model_proto.ssd.feature_extractor.type = 'unknown_feature_extractor'
-    with self.assertRaisesRegexp(ValueError, 'Unknown ssd feature_extractor'):
+    with self.assertRaisesRegex(ValueError, 'Unknown ssd feature_extractor'):
       model_builder.build(model_proto, is_training=True)
 
   def test_unknown_faster_rcnn_feature_extractor(self):
     model_proto = self.create_default_faster_rcnn_model_proto()
     model_proto.faster_rcnn.feature_extractor.type = 'unknown_feature_extractor'
-    with self.assertRaisesRegexp(ValueError,
-                                 'Unknown Faster R-CNN feature_extractor'):
+    with self.assertRaisesRegex(ValueError,
+                                'Unknown Faster R-CNN feature_extractor'):
       model_builder.build(model_proto, is_training=True)
 
   def test_invalid_first_stage_nms_iou_threshold(self):
     model_proto = self.create_default_faster_rcnn_model_proto()
     model_proto.faster_rcnn.first_stage_nms_iou_threshold = 1.1
-    with self.assertRaisesRegexp(ValueError,
-                                 r'iou_threshold not in \[0, 1\.0\]'):
+    with self.assertRaisesRegex(ValueError,
+                                r'iou_threshold not in \[0, 1\.0\]'):
       model_builder.build(model_proto, is_training=True)
     model_proto.faster_rcnn.first_stage_nms_iou_threshold = -0.1
-    with self.assertRaisesRegexp(ValueError,
-                                 r'iou_threshold not in \[0, 1\.0\]'):
+    with self.assertRaisesRegex(ValueError,
+                                r'iou_threshold not in \[0, 1\.0\]'):
       model_builder.build(model_proto, is_training=True)
 
   def test_invalid_second_stage_batch_size(self):
     model_proto = self.create_default_faster_rcnn_model_proto()
     model_proto.faster_rcnn.first_stage_max_proposals = 1
     model_proto.faster_rcnn.second_stage_batch_size = 2
-    with self.assertRaisesRegexp(
+    with self.assertRaisesRegex(
         ValueError, 'second_stage_batch_size should be no greater '
         'than first_stage_max_proposals.'):
       model_builder.build(model_proto, is_training=True)
@@ -323,8 +334,8 @@ class ModelBuilderTest(tf.test.TestCase, parameterized.TestCase):
   def test_invalid_faster_rcnn_batchnorm_update(self):
     model_proto = self.create_default_faster_rcnn_model_proto()
     model_proto.faster_rcnn.inplace_batchnorm_update = True
-    with self.assertRaisesRegexp(ValueError,
-                                 'inplace batchnorm updates not supported'):
+    with self.assertRaisesRegex(ValueError,
+                                'inplace batchnorm updates not supported'):
       model_builder.build(model_proto, is_training=True)
 
   def test_create_experimental_model(self):

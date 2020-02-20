@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-
 r"""Convert raw COCO dataset to TFRecord for object_detection.
 
 Please note that this tool creates sharded output files.
@@ -34,6 +33,7 @@ from __future__ import print_function
 import hashlib
 import io
 import json
+import logging
 import os
 import contextlib2
 import numpy as np
@@ -46,17 +46,13 @@ from object_detection.dataset_tools import tf_record_creation_util
 from object_detection.utils import dataset_util
 from object_detection.utils import label_map_util
 
-
 flags = tf.app.flags
-tf.flags.DEFINE_boolean('include_masks', False,
-                        'Whether to include instance segmentations masks '
-                        '(PNG encoded) in the result. default: False.')
-tf.flags.DEFINE_string('train_image_dir', '',
-                       'Training image directory.')
-tf.flags.DEFINE_string('val_image_dir', '',
-                       'Validation image directory.')
-tf.flags.DEFINE_string('test_image_dir', '',
-                       'Test image directory.')
+tf.flags.DEFINE_boolean(
+    'include_masks', False, 'Whether to include instance segmentations masks '
+    '(PNG encoded) in the result. default: False.')
+tf.flags.DEFINE_string('train_image_dir', '', 'Training image directory.')
+tf.flags.DEFINE_string('val_image_dir', '', 'Validation image directory.')
+tf.flags.DEFINE_string('test_image_dir', '', 'Test image directory.')
 tf.flags.DEFINE_string('train_annotations_file', '',
                        'Training annotations JSON file.')
 tf.flags.DEFINE_string('val_annotations_file', '',
@@ -67,7 +63,8 @@ tf.flags.DEFINE_string('output_dir', '/tmp/', 'Output data directory.')
 
 FLAGS = flags.FLAGS
 
-tf.logging.set_verbosity(tf.logging.INFO)
+logger = tf.get_logger()
+logger.setLevel(logging.INFO)
 
 
 def create_tf_example(image,
@@ -78,25 +75,24 @@ def create_tf_example(image,
   """Converts image and annotations to a tf.Example proto.
 
   Args:
-    image: dict with keys:
-      [u'license', u'file_name', u'coco_url', u'height', u'width',
-      u'date_captured', u'flickr_url', u'id']
+    image: dict with keys: [u'license', u'file_name', u'coco_url', u'height',
+      u'width', u'date_captured', u'flickr_url', u'id']
     annotations_list:
-      list of dicts with keys:
-      [u'segmentation', u'area', u'iscrowd', u'image_id',
-      u'bbox', u'category_id', u'id']
-      Notice that bounding box coordinates in the official COCO dataset are
-      given as [x, y, width, height] tuples using absolute coordinates where
-      x, y represent the top-left (0-indexed) corner.  This function converts
-      to the format expected by the Tensorflow Object Detection API (which is
-      which is [ymin, xmin, ymax, xmax] with coordinates normalized relative
-      to image size).
+      list of dicts with keys: [u'segmentation', u'area', u'iscrowd',
+        u'image_id', u'bbox', u'category_id', u'id'] Notice that bounding box
+        coordinates in the official COCO dataset are given as [x, y, width,
+        height] tuples using absolute coordinates where x, y represent the
+        top-left (0-indexed) corner.  This function converts to the format
+        expected by the Tensorflow Object Detection API (which is which is
+        [ymin, xmin, ymax, xmax] with coordinates normalized relative to image
+        size).
     image_dir: directory containing the image files.
-    category_index: a dict containing COCO category information keyed
-      by the 'id' field of each category.  See the
-      label_map_util.create_category_index function.
+    category_index: a dict containing COCO category information keyed by the
+      'id' field of each category.  See the label_map_util.create_category_index
+      function.
     include_masks: Whether to include instance segmentations masks
       (PNG encoded) in the result. default: False.
+
   Returns:
     example: The converted tf.Example
     num_annotations_skipped: Number of (invalid) annotations that were ignored.
@@ -110,7 +106,7 @@ def create_tf_example(image,
   image_id = image['id']
 
   full_path = os.path.join(image_dir, filename)
-  with tf.gfile.GFile(full_path, 'rb') as fid:
+  with tf.compat.v1.gfile.GFile(full_path, 'rb') as fid:
     encoded_jpg = fid.read()
   encoded_jpg_io = io.BytesIO(encoded_jpg)
   image = PIL.Image.open(encoded_jpg_io)
@@ -191,8 +187,9 @@ def create_tf_example(image,
   return key, example, num_annotations_skipped
 
 
-def _create_tf_record_from_coco_annotations(
-    annotations_file, image_dir, output_path, include_masks, num_shards):
+def _create_tf_record_from_coco_annotations(annotations_file, image_dir,
+                                            output_path, include_masks,
+                                            num_shards):
   """Loads COCO annotation json files and converts to tf.Record format.
 
   Args:
@@ -204,7 +201,7 @@ def _create_tf_record_from_coco_annotations(
     num_shards: number of output file shards.
   """
   with contextlib2.ExitStack() as tf_record_close_stack, \
-      tf.gfile.GFile(annotations_file, 'r') as fid:
+      tf.compat.v1.gfile.GFile(annotations_file, 'r') as fid:
     output_tfrecords = tf_record_creation_util.open_sharded_output_tfrecords(
         tf_record_close_stack, output_path, num_shards)
     groundtruth_data = json.load(fid)
@@ -214,8 +211,7 @@ def _create_tf_record_from_coco_annotations(
 
     annotations_index = {}
     if 'annotations' in groundtruth_data:
-      tf.logging.info(
-          'Found groundtruth annotations. Building annotations index.')
+      logging.info('Found groundtruth annotations. Building annotations index.')
       for annotation in groundtruth_data['annotations']:
         image_id = annotation['image_id']
         if image_id not in annotations_index:
@@ -227,21 +223,20 @@ def _create_tf_record_from_coco_annotations(
       if image_id not in annotations_index:
         missing_annotation_count += 1
         annotations_index[image_id] = []
-    tf.logging.info('%d images are missing annotations.',
-                    missing_annotation_count)
+    logging.info('%d images are missing annotations.', missing_annotation_count)
 
     total_num_annotations_skipped = 0
     for idx, image in enumerate(images):
       if idx % 100 == 0:
-        tf.logging.info('On image %d of %d', idx, len(images))
+        logging.info('On image %d of %d', idx, len(images))
       annotations_list = annotations_index[image['id']]
       _, tf_example, num_annotations_skipped = create_tf_example(
           image, annotations_list, image_dir, category_index, include_masks)
       total_num_annotations_skipped += num_annotations_skipped
       shard_idx = idx % num_shards
       output_tfrecords[shard_idx].write(tf_example.SerializeToString())
-    tf.logging.info('Finished writing, skipped %d annotations.',
-                    total_num_annotations_skipped)
+    logging.info('Finished writing, skipped %d annotations.',
+                 total_num_annotations_skipped)
 
 
 def main(_):
@@ -252,8 +247,8 @@ def main(_):
   assert FLAGS.val_annotations_file, '`val_annotations_file` missing.'
   assert FLAGS.testdev_annotations_file, '`testdev_annotations_file` missing.'
 
-  if not tf.gfile.IsDirectory(FLAGS.output_dir):
-    tf.gfile.MakeDirs(FLAGS.output_dir)
+  if not tf.compat.v1.gfile.IsDirectory(FLAGS.output_dir):
+    tf.compat.v1.gfile.MakeDirs(FLAGS.output_dir)
   train_output_path = os.path.join(FLAGS.output_dir, 'coco_train.record')
   val_output_path = os.path.join(FLAGS.output_dir, 'coco_val.record')
   testdev_output_path = os.path.join(FLAGS.output_dir, 'coco_testdev.record')

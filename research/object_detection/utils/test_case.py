@@ -20,7 +20,7 @@ from __future__ import print_function
 import os
 from six.moves import zip
 import tensorflow as tf
-from tensorflow.contrib import tpu
+from tensorflow.contrib import tpu as contrib_tpu
 
 flags = tf.app.flags
 
@@ -47,13 +47,13 @@ class TestCase(tf.test.TestCase):
     """
     with self.test_session(graph=tf.Graph()) as sess:
       placeholders = [tf.placeholder_with_default(v, v.shape) for v in inputs]
-      tpu_computation = tpu.rewrite(graph_fn, placeholders)
-      sess.run(tpu.initialize_system())
+      tpu_computation = contrib_tpu.rewrite(graph_fn, placeholders)
+      sess.run(contrib_tpu.initialize_system())
       sess.run([tf.global_variables_initializer(), tf.tables_initializer(),
                 tf.local_variables_initializer()])
       materialized_results = sess.run(tpu_computation,
                                       feed_dict=dict(zip(placeholders, inputs)))
-      sess.run(tpu.shutdown_system())
+      sess.run(contrib_tpu.shutdown_system())
       if (hasattr(materialized_results, '__len__') and
           len(materialized_results) == 1 and
           (isinstance(materialized_results, list) or

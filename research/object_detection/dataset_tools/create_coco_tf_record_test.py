@@ -20,6 +20,7 @@ import os
 
 import numpy as np
 import PIL.Image
+import six
 import tensorflow as tf
 
 from object_detection.dataset_tools import create_coco_tf_record
@@ -88,12 +89,13 @@ class CreateCocoTFRecordTest(tf.test.TestCase):
         example.features.feature['image/width'].int64_list.value, [256])
     self._assertProtoEqual(
         example.features.feature['image/filename'].bytes_list.value,
-        [image_file_name])
+        [six.b(image_file_name)])
     self._assertProtoEqual(
         example.features.feature['image/source_id'].bytes_list.value,
-        [str(image['id'])])
+        [six.b(str(image['id']))])
     self._assertProtoEqual(
-        example.features.feature['image/format'].bytes_list.value, ['jpeg'])
+        example.features.feature['image/format'].bytes_list.value,
+        [six.b('jpeg')])
     self._assertProtoEqual(
         example.features.feature['image/object/bbox/xmin'].float_list.value,
         [0.25])
@@ -108,7 +110,7 @@ class CreateCocoTFRecordTest(tf.test.TestCase):
         [0.75])
     self._assertProtoEqual(
         example.features.feature['image/object/class/text'].bytes_list.value,
-        ['cat'])
+        [six.b('cat')])
 
   def test_create_tf_example_with_instance_masks(self):
     image_file_name = 'tmp_image.jpg'
@@ -154,12 +156,13 @@ class CreateCocoTFRecordTest(tf.test.TestCase):
         example.features.feature['image/width'].int64_list.value, [8])
     self._assertProtoEqual(
         example.features.feature['image/filename'].bytes_list.value,
-        [image_file_name])
+        [six.b(image_file_name)])
     self._assertProtoEqual(
         example.features.feature['image/source_id'].bytes_list.value,
-        [str(image['id'])])
+        [six.b(str(image['id']))])
     self._assertProtoEqual(
-        example.features.feature['image/format'].bytes_list.value, ['jpeg'])
+        example.features.feature['image/format'].bytes_list.value,
+        [six.b('jpeg')])
     self._assertProtoEqual(
         example.features.feature['image/object/bbox/xmin'].float_list.value,
         [0])
@@ -174,7 +177,7 @@ class CreateCocoTFRecordTest(tf.test.TestCase):
         [1])
     self._assertProtoEqual(
         example.features.feature['image/object/class/text'].bytes_list.value,
-        ['dog'])
+        [six.b('dog')])
     encoded_mask_pngs = [
         io.BytesIO(encoded_masks) for encoded_masks in example.features.feature[
             'image/object/mask'].bytes_list.value

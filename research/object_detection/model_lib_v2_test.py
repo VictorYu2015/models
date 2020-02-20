@@ -20,10 +20,12 @@ from __future__ import print_function
 
 import os
 
+import numpy as np
 import tensorflow as tf
 
 from object_detection import model_hparams
 from object_detection import model_lib_v2
+from object_detection.protos import train_pb2
 from object_detection.utils import config_util
 
 
@@ -73,7 +75,7 @@ def _get_configs_for_model(model_name):
 class ModelLibTest(tf.test.TestCase):
 
   @classmethod
-  def setUpClass(cls):
+  def setUpClass(cls):  # pylint:disable=g-missing-super-call
     tf.keras.backend.clear_session()
 
   def test_train_loop_then_eval_loop(self):
@@ -101,4 +103,58 @@ class ModelLibTest(tf.test.TestCase):
         train_steps=train_steps,
         wait_interval=10,
         **config_kwarg_overrides)
+
+
+class SimpleModel(tf.keras.Model):
+  """A model with a single weight vector."""
+
+  def __init__(self):
+    super(SimpleModel, self).__init__(self)
+    self.weight = tf.keras.backend.variable(np.ones(10), name='weight')
+
+  def restore_map(self, *args, **kwargs):
+    return {'model': self}
+
+
+class IncompatibleModel(SimpleModel):
+
+  def restore_map(self, *args, **kwargs):
+    return {'weight': self.weight}
+
+
+class CheckpointV2Test(tf.test.TestCase):
+
+  def setUp(self):
+    super(CheckpointV2Test, self).setUp()
+
+    self._model = SimpleModel()
+    tf.keras.backend.set_value(self._model.weight, np.ones(10) * 42)
+    ckpt = tf.train.Checkpoint(model=self._model)
+
+    self._test_dir = tf.test.get_temp_dir()
+    self._ckpt_path = ckpt.save(os.path.join(self._test_dir, 'ckpt'))
+    tf.keras.backend.set_value(self._model.weight, np.ones(10))
+
+  def test_restore_v2(self):
+    """Test that restoring a v2 style checkpoint works."""
+
+    model_lib_v2.load_fine_tune_checkpoint(
+        self._model, self._ckpt_path, checkpoint_type='',
+        checkpoint_version=train_pb2.CheckpointVersion.V2,
+        load_all_detection_checkpoint_vars=True, input_dataset=None,
+        unpad_groundtruth_tensors=True)
+    np.testing.assert_allclose(self._model.weight.numpy(), 42)
+
+  def test_restore_map_incompatible_error(self):
+    """Test that restoring an incompatible restore map causes an error."""
+
+    model = IncompatibleModel()
+    with self.assertRaisesRegex(TypeError,
+                                r'.*received a \(str -> ResourceVariable\).*'):
+      model_lib_v2.load_fine_tune_checkpoint(
+          model, self._ckpt_path, checkpoint_type='',
+          checkpoint_version=train_pb2.CheckpointVersion.V2,
+          load_all_detection_checkpoint_vars=True, input_dataset=None,
+          unpad_groundtruth_tensors=True)
+
 

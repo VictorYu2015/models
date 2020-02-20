@@ -124,6 +124,8 @@ FASTER_RCNN_KERAS_FEATURE_EXTRACTOR_CLASS_MAP = {
 }
 
 
+
+
 def _build_ssd_feature_extractor(feature_extractor_config,
                                  is_training,
                                  freeze_batchnorm,
@@ -208,6 +210,7 @@ def _build_ssd_feature_extractor(feature_extractor_config,
         'conv_hyperparams_fn': conv_hyperparams,
         'reuse_weights': reuse_weights,
     })
+
 
   if feature_extractor_config.HasField('fpn'):
     kwargs.update({
@@ -536,45 +539,72 @@ def _build_faster_rcnn_model(frcnn_config, is_training, add_summaries):
       frcnn_config.clip_anchors_to_image)
 
   common_kwargs = {
-      'is_training': is_training,
-      'num_classes': num_classes,
-      'image_resizer_fn': image_resizer_fn,
-      'feature_extractor': feature_extractor,
-      'number_of_stages': number_of_stages,
-      'first_stage_anchor_generator': first_stage_anchor_generator,
-      'first_stage_target_assigner': first_stage_target_assigner,
-      'first_stage_atrous_rate': first_stage_atrous_rate,
+      'is_training':
+          is_training,
+      'num_classes':
+          num_classes,
+      'image_resizer_fn':
+          image_resizer_fn,
+      'feature_extractor':
+          feature_extractor,
+      'number_of_stages':
+          number_of_stages,
+      'first_stage_anchor_generator':
+          first_stage_anchor_generator,
+      'first_stage_target_assigner':
+          first_stage_target_assigner,
+      'first_stage_atrous_rate':
+          first_stage_atrous_rate,
       'first_stage_box_predictor_arg_scope_fn':
-      first_stage_box_predictor_arg_scope_fn,
+          first_stage_box_predictor_arg_scope_fn,
       'first_stage_box_predictor_kernel_size':
-      first_stage_box_predictor_kernel_size,
-      'first_stage_box_predictor_depth': first_stage_box_predictor_depth,
-      'first_stage_minibatch_size': first_stage_minibatch_size,
-      'first_stage_sampler': first_stage_sampler,
-      'first_stage_non_max_suppression_fn': first_stage_non_max_suppression_fn,
-      'first_stage_max_proposals': first_stage_max_proposals,
-      'first_stage_localization_loss_weight': first_stage_loc_loss_weight,
-      'first_stage_objectness_loss_weight': first_stage_obj_loss_weight,
-      'second_stage_target_assigner': second_stage_target_assigner,
-      'second_stage_batch_size': second_stage_batch_size,
-      'second_stage_sampler': second_stage_sampler,
+          first_stage_box_predictor_kernel_size,
+      'first_stage_box_predictor_depth':
+          first_stage_box_predictor_depth,
+      'first_stage_minibatch_size':
+          first_stage_minibatch_size,
+      'first_stage_sampler':
+          first_stage_sampler,
+      'first_stage_non_max_suppression_fn':
+          first_stage_non_max_suppression_fn,
+      'first_stage_max_proposals':
+          first_stage_max_proposals,
+      'first_stage_localization_loss_weight':
+          first_stage_loc_loss_weight,
+      'first_stage_objectness_loss_weight':
+          first_stage_obj_loss_weight,
+      'second_stage_target_assigner':
+          second_stage_target_assigner,
+      'second_stage_batch_size':
+          second_stage_batch_size,
+      'second_stage_sampler':
+          second_stage_sampler,
       'second_stage_non_max_suppression_fn':
-      second_stage_non_max_suppression_fn,
-      'second_stage_score_conversion_fn': second_stage_score_conversion_fn,
+          second_stage_non_max_suppression_fn,
+      'second_stage_score_conversion_fn':
+          second_stage_score_conversion_fn,
       'second_stage_localization_loss_weight':
-      second_stage_localization_loss_weight,
+          second_stage_localization_loss_weight,
       'second_stage_classification_loss':
-      second_stage_classification_loss,
+          second_stage_classification_loss,
       'second_stage_classification_loss_weight':
-      second_stage_classification_loss_weight,
-      'hard_example_miner': hard_example_miner,
-      'add_summaries': add_summaries,
-      'crop_and_resize_fn': crop_and_resize_fn,
-      'clip_anchors_to_image': clip_anchors_to_image,
-      'use_static_shapes': use_static_shapes,
-      'resize_masks': frcnn_config.resize_masks,
-      'return_raw_detections_during_predict': (
-          frcnn_config.return_raw_detections_during_predict)
+          second_stage_classification_loss_weight,
+      'hard_example_miner':
+          hard_example_miner,
+      'add_summaries':
+          add_summaries,
+      'crop_and_resize_fn':
+          crop_and_resize_fn,
+      'clip_anchors_to_image':
+          clip_anchors_to_image,
+      'use_static_shapes':
+          use_static_shapes,
+      'resize_masks':
+          frcnn_config.resize_masks,
+      'return_raw_detections_during_predict':
+          frcnn_config.return_raw_detections_during_predict,
+      'output_final_box_features':
+          frcnn_config.output_final_box_features
   }
 
   if (isinstance(second_stage_box_predictor,
@@ -602,11 +632,16 @@ def _build_experimental_model(config, is_training, add_summaries=True):
   return EXPERIMENTAL_META_ARCH_BUILDER_MAP[config.name](
       is_training, add_summaries)
 
-META_ARCHITECURE_BUILDER_MAP = {
+
+
+
+META_ARCH_BUILDER_MAP = {
     'ssd': _build_ssd_model,
     'faster_rcnn': _build_faster_rcnn_model,
-    'experimental_model': _build_experimental_model
+    'experimental_model': _build_experimental_model,
 }
+
+
 
 
 def build(model_config, is_training, add_summaries=True):
@@ -628,9 +663,9 @@ def build(model_config, is_training, add_summaries=True):
 
   meta_architecture = model_config.WhichOneof('model')
 
-  if meta_architecture not in META_ARCHITECURE_BUILDER_MAP:
+  if meta_architecture not in META_ARCH_BUILDER_MAP:
     raise ValueError('Unknown meta architecture: {}'.format(meta_architecture))
   else:
-    build_func = META_ARCHITECURE_BUILDER_MAP[meta_architecture]
+    build_func = META_ARCH_BUILDER_MAP[meta_architecture]
     return build_func(getattr(model_config, meta_architecture), is_training,
                       add_summaries)

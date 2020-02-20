@@ -195,6 +195,38 @@ class KeypointOpsTest(tf.test.TestCase):
       output_, expected_keypoints_ = sess.run([output, expected_keypoints])
       self.assertAllClose(output_, expected_keypoints_)
 
+  def test_keypoint_weights_from_visibilities(self):
+    keypoint_visibilities = tf.constant([
+        [True, True, False],
+        [False, True, False]
+    ])
+    per_keypoint_weights = [1.0, 2.0, 3.0]
+    keypoint_weights = keypoint_ops.keypoint_weights_from_visibilities(
+        keypoint_visibilities, per_keypoint_weights)
+
+    expected_keypoint_weights = [
+        [1.0, 2.0, 0.0],
+        [0.0, 2.0, 0.0]
+    ]
+    with self.test_session() as sess:
+      output = sess.run(keypoint_weights)
+      self.assertAllClose(expected_keypoint_weights, output)
+
+  def test_keypoint_weights_from_visibilities_no_per_kpt_weights(self):
+    keypoint_visibilities = tf.constant([
+        [True, True, False],
+        [False, True, False]
+    ])
+    keypoint_weights = keypoint_ops.keypoint_weights_from_visibilities(
+        keypoint_visibilities)
+
+    expected_keypoint_weights = [
+        [1.0, 1.0, 0.0],
+        [0.0, 1.0, 0.0]
+    ]
+    with self.test_session() as sess:
+      output = sess.run(keypoint_weights)
+      self.assertAllClose(expected_keypoint_weights, output)
 
 if __name__ == '__main__':
   tf.test.main()

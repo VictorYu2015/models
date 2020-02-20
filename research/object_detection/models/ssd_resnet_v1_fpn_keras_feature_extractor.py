@@ -1,3 +1,4 @@
+# Lint as: python2, python3
 # Copyright 2019 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -15,6 +16,12 @@
 
 """SSD Keras-based ResnetV1 FPN Feature Extractor."""
 
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+
+from six.moves import range
+from six.moves import zip
 import tensorflow as tf
 
 from object_detection.meta_architectures import ssd_meta_arch
@@ -220,7 +227,8 @@ class SSDResNetV1FpnKerasFeatureExtractor(
     feature_block_list = []
     for level in range(self._fpn_min_level, self._base_fpn_max_level + 1):
       feature_block_list.append('block{}'.format(level - 1))
-    feature_block_map = dict(zip(self._resnet_block_names, image_features))
+    feature_block_map = dict(
+        list(zip(self._resnet_block_names, image_features)))
     fpn_input_image_features = [
         (feature_block, feature_block_map[feature_block])
         for feature_block in feature_block_list]

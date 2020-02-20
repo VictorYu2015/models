@@ -22,10 +22,11 @@ from __future__ import print_function
 import numpy as np
 from six.moves import range
 import tensorflow as tf
+from tensorflow.contrib import slim as contrib_slim
 
 from object_detection.core import batcher
 
-slim = tf.contrib.slim
+slim = contrib_slim
 
 
 class BatcherTest(tf.test.TestCase):

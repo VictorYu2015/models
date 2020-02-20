@@ -38,6 +38,18 @@ from object_detection.utils import shape_utils
 from object_detection.utils import variables_helper
 from object_detection.utils import visualization_utils as vis_utils
 
+# pylint: disable=g-import-not-at-top
+try:
+  from tensorflow.contrib import framework as contrib_framework
+  from tensorflow.contrib import layers as contrib_layers
+  from tensorflow.contrib import learn as contrib_learn
+  from tensorflow.contrib import tpu as contrib_tpu
+  from tensorflow.contrib import training as contrib_training
+except ImportError:
+  # TF 2.0 doesn't ship with contrib.
+  pass
+# pylint: enable=g-import-not-at-top
+
 # A map of names to methods that help build the model.
 MODEL_BUILD_UTIL_MAP = {
     'get_configs_from_pipeline_file':
@@ -296,23 +308,26 @@ def create_model_fn(detection_model_fn, configs, hparams, use_tpu=False,
       provide_groundtruth(detection_model, labels)
 
     preprocessed_images = features[fields.InputDataFields.image]
+
+    side_inputs = detection_model.get_side_inputs(features)
+
     if use_tpu and train_config.use_bfloat16:
-      with tf.contrib.tpu.bfloat16_scope():
+      with contrib_tpu.bfloat16_scope():
         prediction_dict = detection_model.predict(
             preprocessed_images,
-            features[fields.InputDataFields.true_image_shape])
+            features[fields.InputDataFields.true_image_shape], **side_inputs)
         prediction_dict = ops.bfloat16_to_float32_nested(prediction_dict)
     else:
       prediction_dict = detection_model.predict(
           preprocessed_images,
-          features[fields.InputDataFields.true_image_shape])
+          features[fields.InputDataFields.true_image_shape], **side_inputs)
 
     def postprocess_wrapper(args):
       return detection_model.postprocess(args[0], args[1])
 
     if mode in (tf.estimator.ModeKeys.EVAL, tf.estimator.ModeKeys.PREDICT):
       if use_tpu and postprocess_on_cpu:
-        detections = tf.contrib.tpu.outside_compilation(
+        detections = contrib_tpu.outside_compilation(
             postprocess_wrapper,
             (prediction_dict,
              features[fields.InputDataFields.true_image_shape]))
@@ -354,21 +369,26 @@ def create_model_fn(detection_model_fn, configs, hparams, use_tpu=False,
                                         available_var_map)
 
     if mode in (tf.estimator.ModeKeys.TRAIN, tf.estimator.ModeKeys.EVAL):
-      losses_dict = detection_model.loss(
-          prediction_dict, features[fields.InputDataFields.true_image_shape])
-      losses = [loss_tensor for loss_tensor in losses_dict.values()]
-      if train_config.add_regularization_loss:
-        regularization_losses = detection_model.regularization_losses()
-        if use_tpu and train_config.use_bfloat16:
-          regularization_losses = ops.bfloat16_to_float32_nested(
-              regularization_losses)
-        if regularization_losses:
-          regularization_loss = tf.add_n(
-              regularization_losses, name='regularization_loss')
-          losses.append(regularization_loss)
-          losses_dict['Loss/regularization_loss'] = regularization_loss
-      total_loss = tf.add_n(losses, name='total_loss')
-      losses_dict['Loss/total_loss'] = total_loss
+      if (mode == tf.estimator.ModeKeys.EVAL and
+          eval_config.use_dummy_loss_in_eval):
+        total_loss = tf.constant(1.0)
+        losses_dict = {'Loss/total_loss': total_loss}
+      else:
+        losses_dict = detection_model.loss(
+            prediction_dict, features[fields.InputDataFields.true_image_shape])
+        losses = [loss_tensor for loss_tensor in losses_dict.values()]
+        if train_config.add_regularization_loss:
+          regularization_losses = detection_model.regularization_losses()
+          if use_tpu and train_config.use_bfloat16:
+            regularization_losses = ops.bfloat16_to_float32_nested(
+                regularization_losses)
+          if regularization_losses:
+            regularization_loss = tf.add_n(
+                regularization_losses, name='regularization_loss')
+            losses.append(regularization_loss)
+            losses_dict['Loss/regularization_loss'] = regularization_loss
+        total_loss = tf.add_n(losses, name='total_loss')
+        losses_dict['Loss/total_loss'] = total_loss
 
       if 'graph_rewriter_config' in configs:
         graph_rewriter_fn = graph_rewriter_builder.build(
@@ -383,8 +403,7 @@ def create_model_fn(detection_model_fn, configs, hparams, use_tpu=False,
 
     if mode == tf.estimator.ModeKeys.TRAIN:
       if use_tpu:
-        training_optimizer = tf.contrib.tpu.CrossShardOptimizer(
-            training_optimizer)
+        training_optimizer = contrib_tpu.CrossShardOptimizer(training_optimizer)
 
       # Optionally freeze some layers by setting their gradients to be zero.
       trainable_variables = None
@@ -394,7 +413,7 @@ def create_model_fn(detection_model_fn, configs, hparams, use_tpu=False,
       exclude_variables = (
           train_config.freeze_variables
           if train_config.freeze_variables else None)
-      trainable_variables = tf.contrib.framework.filter_variables(
+      trainable_variables = contrib_framework.filter_variables(
           tf.trainable_variables(),
           include_patterns=include_variables,
           exclude_patterns=exclude_variables)
@@ -409,7 +428,7 @@ def create_model_fn(detection_model_fn, configs, hparams, use_tpu=False,
       summaries = [] if use_tpu else None
       if train_config.summarize_gradients:
         summaries = ['gradients', 'gradient_norm', 'global_gradient_norm']
-      train_op = tf.contrib.layers.optimize_loss(
+      train_op = contrib_layers.optimize_loss(
           loss=total_loss,
           global_step=global_step,
           learning_rate=None,
@@ -500,7 +519,7 @@ def create_model_fn(detection_model_fn, configs, hparams, use_tpu=False,
 
     # EVAL executes on CPU, so use regular non-TPU EstimatorSpec.
     if use_tpu and mode != tf.estimator.ModeKeys.EVAL:
-      return tf.contrib.tpu.TPUEstimatorSpec(
+      return contrib_tpu.TPUEstimatorSpec(
           mode=mode,
           scaffold_fn=scaffold_fn,
           predictions=detections,
@@ -535,7 +554,7 @@ def create_estimator_and_inputs(run_config,
                                 pipeline_config_path,
                                 config_override=None,
                                 train_steps=None,
-                                sample_1_of_n_eval_examples=None,
+                                sample_1_of_n_eval_examples=1,
                                 sample_1_of_n_eval_on_train_examples=1,
                                 model_fn_creator=create_model_fn,
                                 use_tpu_estimator=False,
@@ -681,7 +700,7 @@ def create_estimator_and_inputs(run_config,
   model_fn = model_fn_creator(detection_model_fn, configs, hparams, use_tpu,
                               postprocess_on_cpu)
   if use_tpu_estimator:
-    estimator = tf.contrib.tpu.TPUEstimator(
+    estimator = contrib_tpu.TPUEstimator(
         model_fn=model_fn,
         train_batch_size=train_config.batch_size,
         # For each core, only batch size 1 is supported for eval.
@@ -785,7 +804,7 @@ def continuous_eval(estimator, model_dir, input_fn, train_steps, name):
     tf.logging.info('Terminating eval after 180 seconds of no checkpoints')
     return True
 
-  for ckpt in tf.contrib.training.checkpoints_iterator(
+  for ckpt in contrib_training.checkpoints_iterator(
       model_dir, min_interval_secs=180, timeout=None,
       timeout_fn=terminate_eval):
 
@@ -862,11 +881,11 @@ def populate_experiment(run_config,
   train_steps = train_and_eval_dict['train_steps']
 
   export_strategies = [
-      tf.contrib.learn.utils.saved_model_export_utils.make_export_strategy(
+      contrib_learn.utils.saved_model_export_utils.make_export_strategy(
           serving_input_fn=predict_input_fn)
   ]
 
-  return tf.contrib.learn.Experiment(
+  return contrib_learn.Experiment(
       estimator=estimator,
       train_input_fn=train_input_fn,
       eval_input_fn=eval_input_fns[0],

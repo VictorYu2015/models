@@ -1,3 +1,4 @@
+# Lint as: python2, python3
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -15,12 +16,25 @@
 
 """Tests for optimizer_builder."""
 
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+
+import six
 import tensorflow as tf
 
 from google.protobuf import text_format
 
 from object_detection.builders import optimizer_builder
 from object_detection.protos import optimizer_pb2
+
+# pylint: disable=g-import-not-at-top
+try:
+  from tensorflow.contrib import opt as contrib_opt
+except ImportError:
+  # TF 2.0 doesn't ship with contrib.
+  pass
+# pylint: enable=g-import-not-at-top
 
 
 class LearningRateBuilderTest(tf.test.TestCase):
@@ -35,7 +49,8 @@ class LearningRateBuilderTest(tf.test.TestCase):
     text_format.Merge(learning_rate_text_proto, learning_rate_proto)
     learning_rate = optimizer_builder._create_learning_rate(
         learning_rate_proto)
-    self.assertTrue(learning_rate.op.name.endswith('learning_rate'))
+    self.assertTrue(
+        six.ensure_str(learning_rate.op.name).endswith('learning_rate'))
     with self.test_session():
       learning_rate_out = learning_rate.eval()
     self.assertAlmostEqual(learning_rate_out, 0.004)
@@ -53,8 +68,9 @@ class LearningRateBuilderTest(tf.test.TestCase):
     text_format.Merge(learning_rate_text_proto, learning_rate_proto)
     learning_rate = optimizer_builder._create_learning_rate(
         learning_rate_proto)
-    self.assertTrue(learning_rate.op.name.endswith('learning_rate'))
-    self.assertTrue(isinstance(learning_rate, tf.Tensor))
+    self.assertTrue(
+        six.ensure_str(learning_rate.op.name).endswith('learning_rate'))
+    self.assertIsInstance(learning_rate, tf.Tensor)
 
   def testBuildManualStepLearningRate(self):
     learning_rate_text_proto = """
@@ -75,7 +91,7 @@ class LearningRateBuilderTest(tf.test.TestCase):
     text_format.Merge(learning_rate_text_proto, learning_rate_proto)
     learning_rate = optimizer_builder._create_learning_rate(
         learning_rate_proto)
-    self.assertTrue(isinstance(learning_rate, tf.Tensor))
+    self.assertIsInstance(learning_rate, tf.Tensor)
 
   def testBuildCosineDecayLearningRate(self):
     learning_rate_text_proto = """
@@ -91,7 +107,7 @@ class LearningRateBuilderTest(tf.test.TestCase):
     text_format.Merge(learning_rate_text_proto, learning_rate_proto)
     learning_rate = optimizer_builder._create_learning_rate(
         learning_rate_proto)
-    self.assertTrue(isinstance(learning_rate, tf.Tensor))
+    self.assertIsInstance(learning_rate, tf.Tensor)
 
   def testRaiseErrorOnEmptyLearningRate(self):
     learning_rate_text_proto = """
@@ -123,7 +139,7 @@ class OptimizerBuilderTest(tf.test.TestCase):
     optimizer_proto = optimizer_pb2.Optimizer()
     text_format.Merge(optimizer_text_proto, optimizer_proto)
     optimizer, _ = optimizer_builder.build(optimizer_proto)
-    self.assertTrue(isinstance(optimizer, tf.train.RMSPropOptimizer))
+    self.assertIsInstance(optimizer, tf.train.RMSPropOptimizer)
 
   def testBuildMomentumOptimizer(self):
     optimizer_text_proto = """
@@ -140,7 +156,7 @@ class OptimizerBuilderTest(tf.test.TestCase):
     optimizer_proto = optimizer_pb2.Optimizer()
     text_format.Merge(optimizer_text_proto, optimizer_proto)
     optimizer, _ = optimizer_builder.build(optimizer_proto)
-    self.assertTrue(isinstance(optimizer, tf.train.MomentumOptimizer))
+    self.assertIsInstance(optimizer, tf.train.MomentumOptimizer)
 
   def testBuildAdamOptimizer(self):
     optimizer_text_proto = """
@@ -156,7 +172,7 @@ class OptimizerBuilderTest(tf.test.TestCase):
     optimizer_proto = optimizer_pb2.Optimizer()
     text_format.Merge(optimizer_text_proto, optimizer_proto)
     optimizer, _ = optimizer_builder.build(optimizer_proto)
-    self.assertTrue(isinstance(optimizer, tf.train.AdamOptimizer))
+    self.assertIsInstance(optimizer, tf.train.AdamOptimizer)
 
   def testBuildMovingAverageOptimizer(self):
     optimizer_text_proto = """
@@ -172,8 +188,7 @@ class OptimizerBuilderTest(tf.test.TestCase):
     optimizer_proto = optimizer_pb2.Optimizer()
     text_format.Merge(optimizer_text_proto, optimizer_proto)
     optimizer, _ = optimizer_builder.build(optimizer_proto)
-    self.assertTrue(
-        isinstance(optimizer, tf.contrib.opt.MovingAverageOptimizer))
+    self.assertIsInstance(optimizer, contrib_opt.MovingAverageOptimizer)
 
   def testBuildMovingAverageOptimizerWithNonDefaultDecay(self):
     optimizer_text_proto = """
@@ -190,8 +205,7 @@ class OptimizerBuilderTest(tf.test.TestCase):
     optimizer_proto = optimizer_pb2.Optimizer()
     text_format.Merge(optimizer_text_proto, optimizer_proto)
     optimizer, _ = optimizer_builder.build(optimizer_proto)
-    self.assertTrue(
-        isinstance(optimizer, tf.contrib.opt.MovingAverageOptimizer))
+    self.assertIsInstance(optimizer, contrib_opt.MovingAverageOptimizer)
     # TODO(rathodv): Find a way to not depend on the private members.
     self.assertAlmostEqual(optimizer._ema._decay, 0.2)
 

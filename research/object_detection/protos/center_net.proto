@@ -1,0 +1,67 @@
+syntax = "proto2";
+
+package object_detection.protos;
+
+import "object_detection/protos/image_resizer.proto";
+import "object_detection/protos/losses.proto";
+
+// Configuration for the CenterNet meta architecture from the "Objects as
+// Points" paper [1]
+// [1]: https://arxiv.org/abs/1904.07850
+
+message CenterNet {
+  // Number of classes to predict.
+  optional int32 num_classes = 1;
+
+  // Feature extractor config.
+  optional CenterNetFeatureExtractor feature_extractor = 2;
+
+  // Image resizer for preprocessing the input image.
+  optional ImageResizer image_resizer = 3;
+
+  // Parameters which are related to object detection task.
+  message ObjectDetection {
+    // Weight of the task loss. The total loss of the model will be their
+    // summation of task losses weighted by the weights.
+    optional float task_loss_weight = 1 [default = 1.0];
+
+    // Loss configuration for training.
+    optional Loss loss = 2;
+
+    // Weight for the offset localization loss.
+    optional float offset_loss_weight = 3 [default = 1.0];
+
+    // Weight for the height/width localization loss.
+    optional float scale_loss_weight = 4 [default = 0.1];
+
+    // The minimum IOU overlap boxes need to have to not be penalized.
+    optional float min_box_overlap_iou = 5 [default = 0.7];
+
+    // Maximum number of boxes to predict.
+    optional int32 max_box_predictions = 6 [default = 100];
+
+    // The initial bias value of the convlution kernel of the class heatmap
+    // prediction head. -2.19 corresponds to predicting foreground with
+    // a probability of 0.1. See "Focal Loss for Dense Object Detection"
+    // at https://arxiv.org/abs/1708.02002.
+    optional float class_prediction_bias_init = 7 [default = -2.19];
+  }
+  optional ObjectDetection object_detection_task = 4;
+}
+
+message CenterNetFeatureExtractor {
+  optional string type = 1;
+
+  // Channel means to be subtracted from each image channel. If not specified,
+  // we use a default value of 0.
+  repeated float channel_means = 2;
+
+  // Channel standard deviations. Each channel will be normalized by dividing
+  // it by its standard deviation. If not specified, we use a default value
+  // of 1.
+  repeated float channel_stds = 3;
+
+  // If set, will change channel order to be [blue, green, red]. This can be
+  // useful to be compatible with some pre-trained feature extractors.
+  optional bool bgr_ordering = 4 [default = false];
+}

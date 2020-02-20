@@ -29,10 +29,19 @@ from object_detection import model_lib
 from object_detection.builders import model_builder
 from object_detection.builders import optimizer_builder
 from object_detection.core import standard_fields as fields
+from object_detection.protos import train_pb2
 from object_detection.utils import config_util
 from object_detection.utils import label_map_util
 from object_detection.utils import ops
 from object_detection.utils import variables_helper
+
+# pylint: disable=g-import-not-at-top
+try:
+  from tensorflow.contrib import tpu as contrib_tpu
+except ImportError:
+  # TF 2.0 doesn't ship with contrib.
+  pass
+# pylint: enable=g-import-not-at-top
 
 MODEL_BUILD_UTIL_MAP = model_lib.MODEL_BUILD_UTIL_MAP
 
@@ -43,6 +52,12 @@ MODEL_BUILD_UTIL_MAP = model_lib.MODEL_BUILD_UTIL_MAP
 #### Possibly have version that takes it as the whole train & eval dataset,
 #### & verify the loss output from the eval_loop method.
 ### TODO(kaftan): Make sure the unit tests run in TAP presubmits or Kokoro
+
+RESTORE_MAP_ERROR_TEMPLATE = (
+    'Since we are restoring a v2 style checkpoint'
+    ' restore_map was expected to return a (str -> Model) mapping,'
+    ' but we received a ({} -> {}) mapping instead.'
+)
 
 
 def _compute_losses_and_predictions_dicts(
@@ -237,8 +252,26 @@ def eager_train_step(detection_model,
   return total_loss
 
 
+def validate_tf_v2_checkpoint_restore_map(checkpoint_restore_map):
+  """Ensure that given dict is a valid TF v2 style restore map.
+
+  Args:
+    checkpoint_restore_map: A dict mapping strings to tf.keras.Model objects.
+
+  Raises:
+    ValueError: If they keys in checkpoint_restore_map are not strings or if
+      the values are not keras Model objects.
+
+  """
+
+  for key, value in checkpoint_restore_map.items():
+    if not (isinstance(key, str) and isinstance(value, tf.keras.Model)):
+      raise TypeError(RESTORE_MAP_ERROR_TEMPLATE.format(
+          key.__class__.__name__, value.__class__.__name__))
+
+
 def load_fine_tune_checkpoint(
-    model, checkpoint_path, checkpoint_type,
+    model, checkpoint_path, checkpoint_type, checkpoint_version,
     load_all_detection_checkpoint_vars, input_dataset,
     unpad_groundtruth_tensors):
   """Load a fine tuning classification or detection checkpoint.
@@ -260,6 +293,9 @@ def load_fine_tune_checkpoint(
       checkpoint (with compatible variable names) or to restore from a
       classification checkpoint for initialization prior to training.
       Valid values: `detection`, `classification`.
+    checkpoint_version: train_pb2.CheckpointVersion.V1 or V2 enum indicating
+      whether to load checkpoints in V1 style or V2 style. If V2, the
+      input_dataset argument is unused.
     load_all_detection_checkpoint_vars: whether to load all variables (when
       `fine_tune_checkpoint_type` is `detection`). If False, only variables
       within the feature extractor scopes are included. Default False.
@@ -267,36 +303,48 @@ def load_fine_tune_checkpoint(
       to get the shapes for the dummy loss computation.
     unpad_groundtruth_tensors: A parameter passed to unstack_batch.
   """
-  features, labels = iter(input_dataset).next()
 
-  def _dummy_computation_fn(features, labels):
-    model._is_training = False  # pylint: disable=protected-access
-    tf.keras.backend.set_learning_phase(False)
+  if checkpoint_version == train_pb2.CheckpointVersion.V1:
+    features, labels = iter(input_dataset).next()
 
-    labels = model_lib.unstack_batch(
-        labels, unpad_groundtruth_tensors=unpad_groundtruth_tensors)
+    @tf.function
+    def _dummy_computation_fn(features, labels):
+      model._is_training = False  # pylint: disable=protected-access
+      tf.keras.backend.set_learning_phase(False)
 
-    return _compute_losses_and_predictions_dicts(
-        model,
-        features,
-        labels)
+      labels = model_lib.unstack_batch(
+          labels, unpad_groundtruth_tensors=unpad_groundtruth_tensors)
 
-  strategy = tf.compat.v2.distribute.get_strategy()
-  strategy.experimental_run_v2(
-      _dummy_computation_fn, args=(
+      return _compute_losses_and_predictions_dicts(
+          model,
           features,
-          labels,
-      ))
-  var_map = model.restore_map(
-      fine_tune_checkpoint_type=checkpoint_type,
-      load_all_detection_checkpoint_vars=(
-          load_all_detection_checkpoint_vars))
-  available_var_map = variables_helper.get_variables_available_in_checkpoint(
-      var_map,
-      checkpoint_path,
-      include_global_step=False)
-  tf.train.init_from_checkpoint(checkpoint_path,
-                                available_var_map)
+          labels)
+
+    strategy = tf.compat.v2.distribute.get_strategy()
+    strategy.experimental_run_v2(
+        _dummy_computation_fn, args=(
+            features,
+            labels,
+        ))
+    var_map = model.restore_map(
+        fine_tune_checkpoint_type=checkpoint_type,
+        load_all_detection_checkpoint_vars=(
+            load_all_detection_checkpoint_vars))
+    available_var_map = variables_helper.get_variables_available_in_checkpoint(
+        var_map,
+        checkpoint_path,
+        include_global_step=False)
+    tf.train.init_from_checkpoint(checkpoint_path,
+                                  available_var_map)
+  elif checkpoint_version == train_pb2.CheckpointVersion.V2:
+    restore_map = model.restore_map(
+        fine_tune_checkpoint_type=checkpoint_type,
+        load_all_detection_checkpoint_vars=(
+            load_all_detection_checkpoint_vars))
+    validate_tf_v2_checkpoint_restore_map(restore_map)
+
+    ckpt = tf.train.Checkpoint(**restore_map)
+    ckpt.restore(checkpoint_path).assert_existing_objects_matched()
 
 
 def train_loop(
@@ -400,6 +448,7 @@ def train_loop(
     else:
       train_config.fine_tune_checkpoint_type = 'classification'
   fine_tune_checkpoint_type = train_config.fine_tune_checkpoint_type
+  fine_tune_checkpoint_version = train_config.fine_tune_checkpoint_version
 
   # Write the as-run pipeline config to disk.
   if save_final_config:
@@ -412,18 +461,28 @@ def train_loop(
     detection_model = model_builder.build(
         model_config=model_config, is_training=True)
 
-    # Create the inputs.
-    train_input = inputs.train_input(
-        train_config=train_config,
-        train_input_config=train_input_config,
-        model_config=model_config,
-        model=detection_model)
+    def train_dataset_fn(input_context):
+      """Callable to create train input."""
+      batch_size = input_context.get_per_replica_batch_size(
+          train_config.batch_size)
 
-    train_input = strategy.experimental_distribute_dataset(
-        train_input.repeat())
+      # Create the inputs.
+      train_input = inputs.train_input(
+          train_config=train_config,
+          train_input_config=train_input_config,
+          model_config=model_config,
+          model=detection_model, params={'batch_size': batch_size})
+      train_input = train_input.repeat()
+      return train_input.shard(input_context.num_input_pipelines,
+                               input_context.input_pipeline_id)
 
-    global_step = tf.compat.v2.Variable(
-        0, trainable=False, dtype=tf.compat.v2.dtypes.int64, name='global_step')
+    train_input = strategy.experimental_distribute_datasets_from_function(
+        train_dataset_fn)
+
+
+    global_step = tf.Variable(
+        0, trainable=False, dtype=tf.compat.v2.dtypes.int64, name='global_step',
+        aggregation=tf.compat.v2.VariableAggregation.ONLY_FIRST_REPLICA)
     optimizer, (learning_rate,) = optimizer_builder.build(
         train_config.optimizer, global_step=global_step)
 
@@ -434,68 +493,96 @@ def train_loop(
 
   ## Train the model
   summary_writer = tf.compat.v2.summary.create_file_writer(model_dir + '/train')
+
+  if use_tpu:
+    num_steps_per_iteration = 100
+  else:
+    # TODO(b/135933080) Explore setting to 100 when GPU performance issues
+    # are fixed.
+    num_steps_per_iteration = 1
+
   with summary_writer.as_default():
     with strategy.scope():
-      # Load a fine-tuning checkpoint.
-      if fine_tune_checkpoint_path:
-        load_fine_tune_checkpoint(detection_model, fine_tune_checkpoint_path,
-                                  fine_tune_checkpoint_type,
-                                  load_all_detection_checkpoint_vars,
-                                  train_input,
-                                  unpad_groundtruth_tensors)
+      with tf.compat.v2.summary.record_if(
+          lambda: global_step % num_steps_per_iteration == 0):
+        # Load a fine-tuning checkpoint.
+        if fine_tune_checkpoint_path:
+          load_fine_tune_checkpoint(detection_model, fine_tune_checkpoint_path,
+                                    fine_tune_checkpoint_type,
+                                    fine_tune_checkpoint_version,
+                                    load_all_detection_checkpoint_vars,
+                                    train_input,
+                                    unpad_groundtruth_tensors)
 
-      ckpt = tf.compat.v2.train.Checkpoint(
-          step=global_step, model=detection_model, optimizer=optimizer)
-      manager = tf.compat.v2.train.CheckpointManager(
-          ckpt, model_dir, max_to_keep=7)
-      ckpt.restore(manager.latest_checkpoint)
+        ckpt = tf.compat.v2.train.Checkpoint(
+            step=global_step, model=detection_model, optimizer=optimizer)
+        manager = tf.compat.v2.train.CheckpointManager(
+            ckpt, model_dir, max_to_keep=7)
+        ckpt.restore(manager.latest_checkpoint)
 
-      def train_step_fn(features, labels):
-        return eager_train_step(
-            detection_model,
-            features,
-            labels,
-            unpad_groundtruth_tensors,
-            optimizer,
-            learning_rate=learning_rate_fn(),
-            add_regularization_loss=add_regularization_loss,
-            clip_gradients_value=clip_gradients_value,
-            global_step=global_step,
-            num_replicas=strategy.num_replicas_in_sync)
+        def train_step_fn(features, labels):
+          """Single train step."""
+          loss = eager_train_step(
+              detection_model,
+              features,
+              labels,
+              unpad_groundtruth_tensors,
+              optimizer,
+              learning_rate=learning_rate_fn(),
+              add_regularization_loss=add_regularization_loss,
+              clip_gradients_value=clip_gradients_value,
+              global_step=global_step,
+              num_replicas=strategy.num_replicas_in_sync)
+          global_step.assign_add(1)
+          return loss
 
-      @tf.function
-      def _dist_train_step(data_iterator):
-        """A distributed train step."""
-        features, labels = data_iterator.next()
-        per_replica_losses = strategy.experimental_run_v2(
-            train_step_fn, args=(
-                features,
-                labels,
-            ))
-        # TODO(anjalisridhar): explore if it is safe to remove the
-        ## num_replicas scaling of the loss and switch this to a ReduceOp.Mean
-        mean_loss = strategy.reduce(
-            tf.distribute.ReduceOp.SUM, per_replica_losses, axis=None)
-        return mean_loss
+        def _sample_and_train(strategy, train_step_fn, data_iterator):
+          features, labels = data_iterator.next()
+          per_replica_losses = strategy.experimental_run_v2(
+              train_step_fn, args=(features, labels))
+          # TODO(anjalisridhar): explore if it is safe to remove the
+          ## num_replicas scaling of the loss and switch this to a ReduceOp.Mean
+          return strategy.reduce(tf.distribute.ReduceOp.SUM,
+                                 per_replica_losses, axis=None)
 
-      train_input_iter = iter(train_input)
-      for _ in range(train_steps - global_step.value()):
-        start_time = time.time()
+        @tf.function
+        def _dist_train_step(data_iterator):
+          """A distributed train step."""
 
-        loss = _dist_train_step(train_input_iter)
-        global_step.assign_add(1)
-        end_time = time.time()
+          if num_steps_per_iteration > 1:
+            for _ in tf.range(num_steps_per_iteration - 1):
+              _sample_and_train(strategy, train_step_fn, data_iterator)
 
-        tf.compat.v2.summary.scalar(
-            'steps_per_sec', 1.0 / (end_time - start_time),
-            step=global_step)
-        if (int(global_step.value()) % 100) == 0:
-          tf.logging.info(
-              'Step {} time taken {:.3f}s loss={:.3f}'.format(
-                  global_step.value(), end_time - start_time, loss))
+          return _sample_and_train(strategy, train_step_fn, data_iterator)
 
-        if int(global_step.value()) % checkpoint_every_n == 0:
-          manager.save()
+        train_input_iter = iter(train_input)
+        checkpointed_step = int(global_step.value())
+        logged_step = global_step.value()
+
+        last_step_time = time.time()
+        for _ in range(global_step.value(), train_steps,
+                       num_steps_per_iteration):
+
+          loss = _dist_train_step(train_input_iter)
+
+          time_taken = time.time() - last_step_time
+          last_step_time = time.time()
+
+          tf.compat.v2.summary.scalar(
+              'steps_per_sec', num_steps_per_iteration * 1.0 / time_taken,
+              step=global_step)
+
+          if global_step.value() - logged_step >= 100:
+            tf.logging.info(
+                'Step {} per-step time {:.3f}s loss={:.3f}'.format(
+                    global_step.value(), time_taken / num_steps_per_iteration,
+                    loss))
+            logged_step = global_step.value()
+
+          if ((int(global_step.value()) - checkpointed_step) >=
+              checkpoint_every_n):
+            manager.save()
+            checkpointed_step = int(global_step.value())
 
 
 def eager_eval_loop(
@@ -578,7 +665,7 @@ def eager_eval_loop(
     # TODO(kaftan): Depending on how postprocessing will work for TPUS w/
     ## TPUStrategy, may be good to move wrapping to a utility method
     if use_tpu and postprocess_on_cpu:
-      detections = tf.contrib.tpu.outside_compilation(
+      detections = contrib_tpu.outside_compilation(
           postprocess_wrapper,
           (prediction_dict, features[fields.InputDataFields.true_image_shape]))
     else:

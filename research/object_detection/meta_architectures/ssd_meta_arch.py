@@ -19,8 +19,6 @@ models.
 """
 import abc
 import tensorflow as tf
-from tensorflow.contrib import slim as contrib_slim
-from tensorflow.contrib import tpu as contrib_tpu
 
 from object_detection.core import box_list
 from object_detection.core import box_list_ops
@@ -33,7 +31,13 @@ from object_detection.utils import shape_utils
 from object_detection.utils import variables_helper
 from object_detection.utils import visualization_utils
 
-slim = contrib_slim
+# pylint: disable=g-import-not-at-top
+try:
+  from tensorflow.contrib import slim as contrib_slim
+except ImportError:
+  # TF 2.0 doesn't ship with contrib.
+  pass
+# pylint: enable=g-import-not-at-top
 
 
 class SSDFeatureExtractor(object):
@@ -590,10 +594,10 @@ class SSDMetaArch(model.DetectionModel):
     if self._feature_extractor.is_keras_model:
       feature_maps = self._feature_extractor(preprocessed_inputs)
     else:
-      with slim.arg_scope([slim.batch_norm],
-                          is_training=(self._is_training and
-                                       not self._freeze_batchnorm),
-                          updates_collections=batchnorm_updates_collections):
+      with contrib_slim.arg_scope(
+          [contrib_slim.batch_norm],
+          is_training=(self._is_training and not self._freeze_batchnorm),
+          updates_collections=batchnorm_updates_collections):
         with tf.variable_scope(None, self._extract_features_scope,
                                [preprocessed_inputs]):
           feature_maps = self._feature_extractor.extract_features(
@@ -611,10 +615,10 @@ class SSDMetaArch(model.DetectionModel):
     if self._box_predictor.is_keras_model:
       predictor_results_dict = self._box_predictor(feature_maps)
     else:
-      with slim.arg_scope([slim.batch_norm],
-                          is_training=(self._is_training and
-                                       not self._freeze_batchnorm),
-                          updates_collections=batchnorm_updates_collections):
+      with contrib_slim.arg_scope(
+          [contrib_slim.batch_norm],
+          is_training=(self._is_training and not self._freeze_batchnorm),
+          updates_collections=batchnorm_updates_collections):
         predictor_results_dict = self._box_predictor.predict(
             feature_maps, self._anchor_generator.num_anchors_per_location())
     predictions_dict = {
@@ -791,7 +795,7 @@ class SSDMetaArch(model.DetectionModel):
             if self._nms_on_host:
               # Note: NMS is not memory efficient on TPU. This force the NMS
               # to run outside of TPU.
-              return contrib_tpu.outside_compilation(
+              return tf.compat.v1.tpu.outside_compilation(
                   lambda x: self._non_max_suppression_fn(**x), kwargs)
             else:
               return self._non_max_suppression_fn(**kwargs)

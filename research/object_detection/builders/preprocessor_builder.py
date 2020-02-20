@@ -400,4 +400,13 @@ def build(preprocessor_step_config):
       kwargs['random_coef'] = [op.random_coef for op in config.operations]
     return (preprocessor.ssd_random_crop_pad_fixed_aspect_ratio, kwargs)
 
+  if step_type == 'random_square_crop_by_scale':
+    config = preprocessor_step_config.random_square_crop_by_scale
+    return preprocessor.random_square_crop_by_scale, {
+        'scale_min': config.scale_min,
+        'scale_max': config.scale_max,
+        'max_border': config.max_border,
+        'num_scales': config.num_scales
+    }
+
   raise ValueError('Unknown preprocessing step.')

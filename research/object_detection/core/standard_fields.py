@@ -61,6 +61,7 @@ class InputDataFields(object):
     groundtruth_instance_classes: instance mask-level class labels.
     groundtruth_keypoints: ground truth keypoints.
     groundtruth_keypoint_visibilities: ground truth keypoint visibilities.
+    groundtruth_keypoint_weights: groundtruth weight factor for keypoints.
     groundtruth_label_weights: groundtruth label weights.
     groundtruth_weights: groundtruth weight factor for bounding boxes.
     num_groundtruth_boxes: number of groundtruth boxes.
@@ -68,6 +69,11 @@ class InputDataFields(object):
     true_image_shapes: true shapes of images in the resized images, as resized
       images can be padded with zeros.
     multiclass_scores: the label score per class for each box.
+    context_features: a flattened list of contextual features.
+    context_feature_length: the fixed length of each feature in
+      context_features, used for reshaping.
+    valid_context_size: the valid context size, used in filtering the padded
+      context features.
   """
   image = 'image'
   image_additional_channels = 'image_additional_channels'
@@ -93,12 +99,16 @@ class InputDataFields(object):
   groundtruth_instance_classes = 'groundtruth_instance_classes'
   groundtruth_keypoints = 'groundtruth_keypoints'
   groundtruth_keypoint_visibilities = 'groundtruth_keypoint_visibilities'
+  groundtruth_keypoint_weights = 'groundtruth_keypoint_weights'
   groundtruth_label_weights = 'groundtruth_label_weights'
   groundtruth_weights = 'groundtruth_weights'
   num_groundtruth_boxes = 'num_groundtruth_boxes'
   is_annotated = 'is_annotated'
   true_image_shape = 'true_image_shape'
   multiclass_scores = 'multiclass_scores'
+  context_features = 'context_features'
+  context_feature_length = 'context_feature_length'
+  valid_context_size = 'valid_context_size'
 
 
 class DetectionResultFields(object):

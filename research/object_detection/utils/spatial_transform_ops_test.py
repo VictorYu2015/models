@@ -25,6 +25,14 @@ import tensorflow as tf
 from object_detection.utils import spatial_transform_ops as spatial_ops
 from object_detection.utils import test_case
 
+# pylint: disable=g-import-not-at-top
+try:
+  from tensorflow.contrib import tpu as contrib_tpu
+except ImportError:
+  # TF 2.0 doesn't ship with contrib.
+  pass
+# pylint: enable=g-import-not-at-top
+
 
 class BoxGridCoordinateTest(test_case.TestCase):
 
@@ -390,14 +398,14 @@ class MultiLevelRoIAlignTest(test_case.TestCase):
           return spatial_ops.multilevel_roi_align(
               features, tf_boxes, tf_levels, output_size)
 
-        tpu_crop_and_resize_fn = tf.contrib.tpu.rewrite(crop_and_resize_fn)
-        sess.run(tf.contrib.tpu.initialize_system())
+        tpu_crop_and_resize_fn = contrib_tpu.rewrite(crop_and_resize_fn)
+        sess.run(contrib_tpu.initialize_system())
         sess.run(tf.global_variables_initializer())
         roi_features = sess.run(tpu_crop_and_resize_fn)
         self.assertEqual(roi_features[0].shape,
                          (batch_size, num_boxes, output_size[0], output_size[1],
                           num_filters))
-        sess.run(tf.contrib.tpu.shutdown_system())
+        sess.run(contrib_tpu.shutdown_system())
 
 
 class MatMulCropAndResizeTest(test_case.TestCase):

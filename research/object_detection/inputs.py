@@ -76,7 +76,8 @@ def transform_input_data(tensor_dict,
                          retain_original_image=False,
                          use_multiclass_scores=False,
                          use_bfloat16=False,
-                         retain_original_image_additional_channels=False):
+                         retain_original_image_additional_channels=False,
+                         keypoint_type_weight=None):
   """A single function that is responsible for all input data transformations.
 
   Data transformation functions are applied in the following order.
@@ -85,10 +86,15 @@ def transform_input_data(tensor_dict,
      fields.InputDataFields.image.
   2. data_augmentation_fn (optional): applied on tensor_dict.
   3. model_preprocess_fn: applied only on image tensor in tensor_dict.
-  4. image_resizer_fn: applied on original image and instance mask tensor in
+  4. keypoint_type_weight (optional): If groundtruth keypoints are in
+     the tensor dictionary, per-keypoint weights are produced. These weights are
+     initialized by `keypoint_type_weight` (or ones if left None).
+     Then, for all keypoints that are not visible, the weights are set to 0 (to
+     avoid penalizing the model in a loss function).
+  5. image_resizer_fn: applied on original image and instance mask tensor in
      tensor_dict.
-  5. one_hot_encoding: applied to classes tensor in tensor_dict.
-  6. merge_multiple_boxes (optional): when groundtruth boxes are exactly the
+  6. one_hot_encoding: applied to classes tensor in tensor_dict.
+  7. merge_multiple_boxes (optional): when groundtruth boxes are exactly the
      same they can be merged into a single box with an associated k-hot class
      label.
 
@@ -117,6 +123,9 @@ def transform_input_data(tensor_dict,
     use_bfloat16: (optional) a bool, whether to use bfloat16 in training.
     retain_original_image_additional_channels: (optional) Whether to retain
       original image additional channels in the output dictionary.
+    keypoint_type_weight: A list (of length num_keypoints) containing
+      groundtruth loss weights to use for each keypoint. If None, will use a
+      weight of 1.
 
   Returns:
     A dictionary keyed by fields.InputDataFields containing the tensors obtained
@@ -182,6 +191,17 @@ def transform_input_data(tensor_dict,
                                                                im_box)
     out_tensor_dict[
         fields.InputDataFields.groundtruth_keypoints] = realigned_keypoints
+    flds_gt_kpt = fields.InputDataFields.groundtruth_keypoints
+    flds_gt_kpt_vis = fields.InputDataFields.groundtruth_keypoint_visibilities
+    flds_gt_kpt_weights = fields.InputDataFields.groundtruth_keypoint_weights
+    if flds_gt_kpt_vis not in out_tensor_dict:
+      out_tensor_dict[flds_gt_kpt_vis] = tf.ones_like(
+          out_tensor_dict[flds_gt_kpt][:, :, 0],
+          dtype=tf.bool)
+    out_tensor_dict[flds_gt_kpt_weights] = (
+        keypoint_ops.keypoint_weights_from_visibilities(
+            out_tensor_dict[flds_gt_kpt_vis],
+            keypoint_type_weight))
 
   if use_bfloat16:
     preprocessed_resized_image = tf.cast(
@@ -242,8 +262,12 @@ def transform_input_data(tensor_dict,
   return out_tensor_dict
 
 
-def pad_input_data_to_static_shapes(tensor_dict, max_num_boxes, num_classes,
-                                    spatial_image_shape=None):
+def pad_input_data_to_static_shapes(tensor_dict,
+                                    max_num_boxes,
+                                    num_classes,
+                                    spatial_image_shape=None,
+                                    max_num_context_features=None,
+                                    context_feature_length=None):
   """Pads input tensors to static shapes.
 
   In case num_additional_channels > 0, we assume that the additional channels
@@ -257,6 +281,9 @@ def pad_input_data_to_static_shapes(tensor_dict, max_num_boxes, num_classes,
       padding.
     spatial_image_shape: A list of two integers of the form [height, width]
       containing expected spatial shape of the image.
+    max_num_context_features (optional): The maximum number of context
+      features needed to compute shapes padding.
+    context_feature_length (optional): The length of the context feature.
 
   Returns:
     A dictionary keyed by fields.InputDataFields containing padding shapes for
@@ -264,7 +291,9 @@ def pad_input_data_to_static_shapes(tensor_dict, max_num_boxes, num_classes,
 
   Raises:
     ValueError: If groundtruth classes is neither rank 1 nor rank 2, or if we
-      detect that additional channels have not been concatenated yet.
+      detect that additional channels have not been concatenated yet, or if
+      max_num_context_features is not specified and context_features is in the
+      tensor dict.
   """
 
   if not spatial_image_shape or spatial_image_shape == [-1, -1]:
@@ -295,6 +324,12 @@ def pad_input_data_to_static_shapes(tensor_dict, max_num_boxes, num_classes,
         num_channels):
       raise ValueError(
           'Image must be already concatenated with additional channels.')
+
+  if fields.InputDataFields.context_features in tensor_dict and (
+      max_num_context_features is None):
+    raise ValueError('max_num_context_features must be specified in the model '
+                     'config if include_context is specified in the input '
+                     'config')
 
   padding_shapes = {
       fields.InputDataFields.image: [
@@ -347,6 +382,25 @@ def pad_input_data_to_static_shapes(tensor_dict, max_num_boxes, num_classes,
     padding_shape = [max_num_boxes, shape_utils.get_dim_as_int(tensor_shape[1])]
     padding_shapes[fields.InputDataFields.
                    groundtruth_keypoint_visibilities] = padding_shape
+
+  if fields.InputDataFields.groundtruth_keypoint_weights in tensor_dict:
+    tensor_shape = tf.shape(tensor_dict[fields.InputDataFields.
+                                        groundtruth_keypoint_weights])
+    padding_shape = [max_num_boxes, shape_utils.get_dim_as_int(tensor_shape[1])]
+    padding_shapes[fields.InputDataFields.
+                   groundtruth_keypoint_weights] = padding_shape
+
+  # Prepare for ContextRCNN related fields.
+  if fields.InputDataFields.context_features in tensor_dict:
+    padding_shape = [max_num_context_features, context_feature_length]
+    padding_shapes[fields.InputDataFields.context_features] = padding_shape
+
+    tensor_shape = tf.shape(
+        tensor_dict[fields.InputDataFields.context_features])
+    tensor_dict[fields.InputDataFields.valid_context_size] = tensor_shape[0]
+    padding_shapes[fields.InputDataFields.valid_context_size] = []
+  if fields.InputDataFields.context_feature_length in tensor_dict:
+    padding_shapes[fields.InputDataFields.context_feature_length] = []
 
   padded_tensor_dict = {}
   for tensor_name in tensor_dict:
@@ -420,7 +474,9 @@ def _get_labels_dict(input_dict):
       fields.InputDataFields.groundtruth_instance_masks,
       fields.InputDataFields.groundtruth_area,
       fields.InputDataFields.groundtruth_is_crowd,
-      fields.InputDataFields.groundtruth_difficult
+      fields.InputDataFields.groundtruth_difficult,
+      fields.InputDataFields.groundtruth_keypoint_visibilities,
+      fields.InputDataFields.groundtruth_keypoint_weights,
   ]
 
   for key in optional_label_keys:
@@ -483,6 +539,12 @@ def _get_features_dict(input_dict):
   if fields.InputDataFields.image_additional_channels in input_dict:
     features[fields.InputDataFields.image_additional_channels] = input_dict[
         fields.InputDataFields.image_additional_channels]
+  if fields.InputDataFields.context_features in input_dict:
+    features[fields.InputDataFields.context_features] = input_dict[
+        fields.InputDataFields.context_features]
+  if fields.InputDataFields.valid_context_size in input_dict:
+    features[fields.InputDataFields.valid_context_size] = input_dict[
+        fields.InputDataFields.valid_context_size]
   return features
 
 
@@ -550,6 +612,12 @@ def train_input(train_config, train_input_config,
       labels[fields.InputDataFields.groundtruth_keypoints] is a
         [batch_size, num_boxes, num_keypoints, 2] float32 tensor containing
         keypoints for each box.
+      labels[fields.InputDataFields.groundtruth_weights] is a
+        [batch_size, num_boxes, num_keypoints] float32 tensor containing
+        groundtruth weights for the keypoints.
+      labels[fields.InputDataFields.groundtruth_visibilities] is a
+        [batch_size, num_boxes, num_keypoints] bool tensor containing
+        groundtruth visibilities for each keypoint.
 
   Raises:
     TypeError: if the `train_config`, `train_input_config` or `model_config`
@@ -571,6 +639,8 @@ def train_input(train_config, train_input_config,
   else:
     model_preprocess_fn = model.preprocess
 
+  num_classes = config_util.get_number_of_classes(model_config)
+
   def transform_and_pad_input_data_fn(tensor_dict):
     """Combines transform and pad operation."""
     data_augmentation_options = [
@@ -583,22 +653,28 @@ def train_input(train_config, train_input_config,
 
     image_resizer_config = config_util.get_image_resizer_config(model_config)
     image_resizer_fn = image_resizer_builder.build(image_resizer_config)
+    keypoint_type_weight = train_input_config.keypoint_type_weight or None
     transform_data_fn = functools.partial(
         transform_input_data, model_preprocess_fn=model_preprocess_fn,
         image_resizer_fn=image_resizer_fn,
-        num_classes=config_util.get_number_of_classes(model_config),
+        num_classes=num_classes,
         data_augmentation_fn=data_augmentation_fn,
         merge_multiple_boxes=train_config.merge_multiple_label_boxes,
         retain_original_image=train_config.retain_original_images,
         use_multiclass_scores=train_config.use_multiclass_scores,
-        use_bfloat16=train_config.use_bfloat16)
+        use_bfloat16=train_config.use_bfloat16,
+        keypoint_type_weight=keypoint_type_weight)
 
     tensor_dict = pad_input_data_to_static_shapes(
         tensor_dict=transform_data_fn(tensor_dict),
         max_num_boxes=train_input_config.max_number_of_boxes,
-        num_classes=config_util.get_number_of_classes(model_config),
+        num_classes=num_classes,
         spatial_image_shape=config_util.get_spatial_image_size(
-            image_resizer_config))
+            image_resizer_config),
+        max_num_context_features=config_util.get_max_num_context_features(
+            model_config),
+        context_feature_length=config_util.get_context_feature_length(
+            model_config))
     return (_get_features_dict(tensor_dict), _get_labels_dict(tensor_dict))
 
   dataset = INPUT_BUILDER_UTIL_MAP['dataset_build'](
@@ -667,6 +743,12 @@ def eval_input(eval_config, eval_input_config, model_config,
       labels[fields.InputDataFields.groundtruth_instance_masks] is a
         [1, num_boxes, H, W] float32 tensor containing only binary values,
         which represent instance masks for objects.
+      labels[fields.InputDataFields.groundtruth_weights] is a
+        [batch_size, num_boxes, num_keypoints] float32 tensor containing
+        groundtruth weights for the keypoints.
+      labels[fields.InputDataFields.groundtruth_visibilities] is a
+        [batch_size, num_boxes, num_keypoints] bool tensor containing
+        groundtruth visibilities for each keypoint.
 
   Raises:
     TypeError: if the `eval_config`, `eval_input_config` or `model_config`
@@ -703,6 +785,7 @@ def eval_input(eval_config, eval_input_config, model_config,
 
     image_resizer_config = config_util.get_image_resizer_config(model_config)
     image_resizer_fn = image_resizer_builder.build(image_resizer_config)
+    keypoint_type_weight = eval_input_config.keypoint_type_weight or None
 
     transform_data_fn = functools.partial(
         transform_input_data, model_preprocess_fn=model_preprocess_fn,
@@ -711,13 +794,18 @@ def eval_input(eval_config, eval_input_config, model_config,
         data_augmentation_fn=None,
         retain_original_image=eval_config.retain_original_images,
         retain_original_image_additional_channels=
-        eval_config.retain_original_image_additional_channels)
+        eval_config.retain_original_image_additional_channels,
+        keypoint_type_weight=keypoint_type_weight)
     tensor_dict = pad_input_data_to_static_shapes(
         tensor_dict=transform_data_fn(tensor_dict),
         max_num_boxes=eval_input_config.max_number_of_boxes,
         num_classes=config_util.get_number_of_classes(model_config),
         spatial_image_shape=config_util.get_spatial_image_size(
-            image_resizer_config))
+            image_resizer_config),
+        max_num_context_features=config_util.get_max_num_context_features(
+            model_config),
+        context_feature_length=config_util.get_context_feature_length(
+            model_config))
     return (_get_features_dict(tensor_dict), _get_labels_dict(tensor_dict))
   dataset = INPUT_BUILDER_UTIL_MAP['dataset_build'](
       eval_input_config,

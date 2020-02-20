@@ -26,6 +26,7 @@ Cheng-Yang Fu, Alexander C. Berg
 import numpy as np
 
 import tensorflow as tf
+from tensorflow.contrib import framework as contrib_framework
 
 from object_detection.anchor_generators import grid_anchor_generator
 from object_detection.core import anchor_generator
@@ -212,7 +213,7 @@ class MultipleGridAnchorGenerator(anchor_generator.AnchorGenerator):
     min_im_shape = tf.minimum(im_height, im_width)
     scale_height = min_im_shape / im_height
     scale_width = min_im_shape / im_width
-    if not tf.contrib.framework.is_tensor(self._base_anchor_size):
+    if not contrib_framework.is_tensor(self._base_anchor_size):
       base_anchor_size = [
           scale_height * tf.constant(self._base_anchor_size[0],
                                      dtype=tf.float32),

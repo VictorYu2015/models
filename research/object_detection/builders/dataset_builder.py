@@ -1,3 +1,4 @@
+# Lint as: python2, python3
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,10 +22,15 @@ Note: If users wishes to also use their own InputReaders with the Object
 Detection configuration framework, they should define their own builder function
 that wraps the build function.
 """
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+
 import functools
 import tensorflow as tf
 
-from object_detection.data_decoders import tf_example_decoder
+from tensorflow.contrib import data as tf_data
+from object_detection.builders import decoder_builder
 from object_detection.protos import input_reader_pb2
 
 
@@ -49,7 +55,7 @@ def read_dataset(file_read_func, input_files, config):
   """Reads a dataset, and handles repetition and shuffling.
 
   Args:
-    file_read_func: Function to use in tf.contrib.data.parallel_interleave, to
+    file_read_func: Function to use in tf_data.parallel_interleave, to
       read every individual file into a tf.data.Dataset.
     input_files: A list of file paths to read.
     config: A input_reader_builder.InputReader object.
@@ -79,7 +85,7 @@ def read_dataset(file_read_func, input_files, config):
                        'still slightly shuffled since `num_readers` > 1.')
   filename_dataset = filename_dataset.repeat(config.num_epochs or None)
   records_dataset = filename_dataset.apply(
-      tf.contrib.data.parallel_interleave(
+      tf_data.parallel_interleave(
           file_read_func,
           cycle_length=num_readers,
           block_length=config.read_block_length,
@@ -112,22 +118,13 @@ def build(input_reader_config, batch_size=None, transform_input_data_fn=None):
     raise ValueError('input_reader_config not of type '
                      'input_reader_pb2.InputReader.')
 
+  decoder = decoder_builder.build(input_reader_config)
+
   if input_reader_config.WhichOneof('input_reader') == 'tf_record_input_reader':
     config = input_reader_config.tf_record_input_reader
     if not config.input_path:
       raise ValueError('At least one input path must be specified in '
                        '`input_reader_config`.')
-
-    label_map_proto_file = None
-    if input_reader_config.HasField('label_map_path'):
-      label_map_proto_file = input_reader_config.label_map_path
-    decoder = tf_example_decoder.TfExampleDecoder(
-        load_instance_masks=input_reader_config.load_instance_masks,
-        load_multiclass_scores=input_reader_config.load_multiclass_scores,
-        instance_mask_type=input_reader_config.mask_type,
-        label_map_proto_file=label_map_proto_file,
-        use_display_name=input_reader_config.use_display_name,
-        num_additional_channels=input_reader_config.num_additional_channels)
 
     def process_fn(value):
       """Sets up tf graph that decodes, transforms and pads input data."""
@@ -155,7 +152,7 @@ def build(input_reader_config, batch_size=None, transform_input_data_fn=None):
     dataset = data_map_fn(process_fn, num_parallel_calls=num_parallel_calls)
     if batch_size:
       dataset = dataset.apply(
-          tf.contrib.data.batch_and_drop_remainder(batch_size))
+          tf_data.batch_and_drop_remainder(batch_size))
     dataset = dataset.prefetch(input_reader_config.num_prefetch_batches)
     return dataset
 

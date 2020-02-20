@@ -83,6 +83,7 @@ from object_detection.core import keypoint_ops
 from object_detection.core import preprocessor_cache
 from object_detection.core import standard_fields as fields
 from object_detection.utils import autoaugment_utils
+from object_detection.utils import ops
 from object_detection.utils import patch_ops
 from object_detection.utils import shape_utils
 
@@ -463,18 +464,18 @@ def _flip_boxes_left_right(boxes):
   """Left-right flip the boxes.
 
   Args:
-    boxes: rank 2 float32 tensor containing the bounding boxes -> [N, 4].
+    boxes: Float32 tensor containing the bounding boxes -> [..., 4].
            Boxes are in normalized form meaning their coordinates vary
            between [0, 1].
-           Each row is in the form of [ymin, xmin, ymax, xmax].
+           Each last dimension is in the form of [ymin, xmin, ymax, xmax].
 
   Returns:
     Flipped boxes.
   """
-  ymin, xmin, ymax, xmax = tf.split(value=boxes, num_or_size_splits=4, axis=1)
+  ymin, xmin, ymax, xmax = tf.split(value=boxes, num_or_size_splits=4, axis=-1)
   flipped_xmin = tf.subtract(1.0, xmax)
   flipped_xmax = tf.subtract(1.0, xmin)
-  flipped_boxes = tf.concat([ymin, flipped_xmin, ymax, flipped_xmax], 1)
+  flipped_boxes = tf.concat([ymin, flipped_xmin, ymax, flipped_xmax], axis=-1)
   return flipped_boxes
 
 
@@ -2869,6 +2870,49 @@ def resize_to_max_dimension(image, masks=None, max_dimension=600,
     return result
 
 
+def resize_pad_to_multiple(image, masks=None, multiple=1):
+  """Resize an image by zero padding it to the specified multiple.
+
+  For example, with an image of size (101, 199, 3) and multiple=4,
+  the returned image will have shape (104, 200, 3).
+
+  Args:
+    image: a tensor of shape [height, width, channels]
+    masks: (optional) a tensor of shape [num_instances, height, width]
+    multiple: int, the multiple to which the height and width of the input
+      will be padded.
+
+  Returns:
+    resized_image: The image with 0 padding applied, such that output
+      dimensions are divisible by `multiple`
+    resized_masks: If masks are given, they are resized to the same
+      spatial dimensions as the image.
+    resized_image_shape: An interger tensor of shape [3] which holds
+      the shape of the input image.
+
+  """
+
+  if len(image.get_shape()) != 3:
+    raise ValueError('Image should be 3D tensor')
+
+  with tf.name_scope('ResizePadToMultiple', values=[image, multiple]):
+    image_height, image_width, num_channels = _get_image_info(image)
+    image = image[tf.newaxis, :, :, :]
+    image = ops.pad_to_multiple(image, multiple)[0, :, :, :]
+
+    if masks is not None:
+      masks = tf.transpose(masks, (1, 2, 0))
+      masks = masks[tf.newaxis, :, :, :]
+
+      masks = ops.pad_to_multiple(masks, multiple)[0, :, :, :]
+      masks = tf.transpose(masks, (2, 0, 1))
+
+  if masks is None:
+    return image, (image_height, image_width, num_channels)
+  else:
+    return image, masks, (image_height, image_width, num_channels)
+
+
 def scale_boxes_to_pixel_coordinates(image, boxes, keypoints=None):
   """Scales boxes from normalized to pixel coordinates.
 
@@ -3702,6 +3746,176 @@ def convert_class_logits_to_softmax(multiclass_scores, temperature=1.0):
   return multiclass_scores
 
 
+def _get_crop_border(border, size):
+  border = tf.cast(border, tf.float32)
+  size = tf.cast(size, tf.float32)
+
+  i = tf.ceil(tf.log(2.0 * border / size) / tf.log(2.0))
+  divisor = tf.pow(2.0, i)
+  divisor = tf.clip_by_value(divisor, 1, border)
+  divisor = tf.cast(divisor, tf.int32)
+
+  return tf.cast(border, tf.int32) // divisor
+
+
+def random_square_crop_by_scale(image, boxes, labels, label_weights,
+                                masks=None, keypoints=None, max_border=128,
+                                scale_min=0.6, scale_max=1.3, num_scales=8,
+                                seed=None, preprocess_vars_cache=None):
+  """Randomly crop a square in proportion to scale and image size.
+
+   Extract a square sized crop from an image whose side length is sampled by
+   randomly scaling the maximum spatial dimension of the image. If part of
+   the crop falls outside the image, it is filled with zeros.
+   The augmentation is borrowed from [1]
+   [1]: https://arxiv.org/abs/1904.07850
+
+  Args:
+    image: rank 3 float32 tensor containing 1 image ->
+           [height, width,channels].
+    boxes: rank 2 float32 tensor containing the bounding boxes -> [N, 4].
+           Boxes are in normalized form meaning their coordinates vary
+           between [0, 1]. Each row is in the form of [ymin, xmin, ymax, xmax].
+           Boxes on the crop boundary are clipped to the boundary and boxes
+           falling outside the crop are ignored.
+    labels: rank 1 int32 tensor containing the object classes.
+    label_weights: float32 tensor of shape [num_instances] representing the
+      weight for each box.
+    masks: (optional) rank 3 float32 tensor with shape
+           [num_instances, height, width] containing instance masks. The masks
+           are of the same height, width as the input `image`.
+    keypoints: (optional) rank 3 float32 tensor with shape
+      [num_instances, num_keypoints, 2]. The keypoints are in y-x normalized
+      coordinates.
+    max_border: The maximum size of the border. The border defines distance in
+      pixels to the image boundaries that will not be considered as a center of
+      a crop. To make sure that the border does not go over the center of the
+      image, we chose the border value by computing the minimum k, such that
+      (max_border / (2**k)) < image_dimension/2.
+    scale_min: float, the minimum value for scale.
+    scale_max: float, the maximum value for scale.
+    num_scales: int, the number of discrete scale values to sample between
+      [scale_min, scale_max]
+    seed: random seed.
+    preprocess_vars_cache: PreprocessorCache object that records previously
+                           performed augmentations. Updated in-place. If this
+                           function is called multiple times with the same
+                           non-null cache, it will perform deterministically.
+
+
+  Returns:
+    image: image which is the same rank as input image.
+    boxes: boxes which is the same rank as input boxes.
+           Boxes are in normalized form.
+    labels: new labels.
+    label_weights: rank 1 float32 tensor with shape [num_instances].
+    masks: rank 3 float32 tensor with shape [num_instances, height, width]
+           containing instance masks.
+
+  """
+
+  img_shape = tf.shape(image)
+  height, width = img_shape[0], img_shape[1]
+  scales = tf.linspace(scale_min, scale_max, num_scales)
+
+  scale = _get_or_create_preprocess_rand_vars(
+      lambda: scales[_random_integer(0, num_scales, seed)],
+      preprocessor_cache.PreprocessorCache.SQUARE_CROP_BY_SCALE,
+      preprocess_vars_cache, 'scale')
+
+  image_size = scale * tf.cast(tf.maximum(height, width), tf.float32)
+  image_size = tf.cast(image_size, tf.int32)
+  h_border = _get_crop_border(max_border, height)
+  w_border = _get_crop_border(max_border, width)
+
+  def y_function():
+    y = _random_integer(h_border,
+                        tf.cast(height, tf.int32) - h_border + 1,
+                        seed)
+    return y
+
+  def x_function():
+    x = _random_integer(w_border,
+                        tf.cast(width, tf.int32) - w_border + 1,
+                        seed)
+    return x
+
+  y_center = _get_or_create_preprocess_rand_vars(
+      y_function,
+      preprocessor_cache.PreprocessorCache.SQUARE_CROP_BY_SCALE,
+      preprocess_vars_cache, 'y_center')
+
+  x_center = _get_or_create_preprocess_rand_vars(
+      x_function,
+      preprocessor_cache.PreprocessorCache.SQUARE_CROP_BY_SCALE,
+      preprocess_vars_cache, 'x_center')
+
+  half_size = tf.cast(image_size / 2, tf.int32)
+  crop_ymin, crop_ymax = y_center - half_size, y_center + half_size
+  crop_xmin, crop_xmax = x_center - half_size, x_center + half_size
+
+  ymin = tf.maximum(crop_ymin, 0)
+  xmin = tf.maximum(crop_xmin, 0)
+  ymax = tf.minimum(crop_ymax, height - 1)
+  xmax = tf.minimum(crop_xmax, width - 1)
+
+  cropped_image = image[ymin:ymax, xmin:xmax]
+  offset_y = tf.maximum(0, ymin - crop_ymin)
+  offset_x = tf.maximum(0, xmin - crop_xmin)
+
+  oy_i = offset_y
+  ox_i = offset_x
+
+  output_image = tf.image.pad_to_bounding_box(
+      cropped_image, offset_height=oy_i, offset_width=ox_i,
+      target_height=image_size, target_width=image_size)
+
+  if ymin == 0:
+    # We might be padding the image.
+    box_ymin = -offset_y
+  else:
+    box_ymin = crop_ymin
+
+  if xmin == 0:
+    # We might be padding the image.
+    box_xmin = -offset_x
+  else:
+    box_xmin = crop_xmin
+
+  box_ymax = box_ymin + image_size
+  box_xmax = box_xmin + image_size
+
+  image_box = [box_ymin / height, box_xmin / width,
+               box_ymax / height, box_xmax / width]
+  boxlist = box_list.BoxList(boxes)
+  boxlist = box_list_ops.change_coordinate_frame(boxlist, image_box)
+  boxlist, indices = box_list_ops.prune_completely_outside_window(
+      boxlist, [0.0, 0.0, 1.0, 1.0])
+  boxlist = box_list_ops.clip_to_window(boxlist, [0.0, 0.0, 1.0, 1.0],
+                                        filter_nonoverlapping=False)
+
+  return_values = [output_image, boxlist.get(),
+                   tf.gather(labels, indices),
+                   tf.gather(label_weights, indices)]
+
+  if masks is not None:
+    new_masks = tf.expand_dims(masks, -1)
+    new_masks = new_masks[:, ymin:ymax, xmin:xmax]
+    new_masks = tf.image.pad_to_bounding_box(
+        new_masks, oy_i, ox_i, image_size, image_size)
+    new_masks = tf.squeeze(new_masks, [-1])
+    return_values.append(tf.gather(new_masks, indices))
+
+  if keypoints is not None:
+    keypoints = tf.gather(keypoints, indices)
+    keypoints = keypoint_ops.change_coordinate_frame(keypoints, image_box)
+    keypoints = keypoint_ops.prune_outside_window(keypoints,
+                                                  [0.0, 0.0, 1.0, 1.0])
+    return_values.append(keypoints)
+
+  return return_values
+
+
 def get_default_func_arg_map(include_label_weights=True,
                              include_label_confidences=False,
                              include_multiclass_scores=False,
@@ -3904,6 +4118,14 @@ def get_default_func_arg_map(include_label_weights=True,
           groundtruth_keypoints,
       ),
       convert_class_logits_to_softmax: (multiclass_scores,),
+      random_square_crop_by_scale: (
+          fields.InputDataFields.image,
+          fields.InputDataFields.groundtruth_boxes,
+          fields.InputDataFields.groundtruth_classes,
+          groundtruth_label_weights,
+          groundtruth_instance_masks,
+          groundtruth_keypoints
+      ),
   }
 
   return prep_func_arg_map

@@ -1,3 +1,4 @@
+# Lint as: python2, python3
 # Copyright 2017 The TensorFlow Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -14,8 +15,13 @@
 # ==============================================================================
 """Tests for dataset_builder."""
 
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+
 import os
 import numpy as np
+from six.moves import range
 import tensorflow as tf
 
 from google.protobuf import text_format
@@ -24,6 +30,14 @@ from object_detection.builders import dataset_builder
 from object_detection.core import standard_fields as fields
 from object_detection.protos import input_reader_pb2
 from object_detection.utils import dataset_util
+
+# pylint: disable=g-import-not-at-top
+try:
+  from tensorflow.contrib import lookup as contrib_lookup
+except ImportError:
+  # TF 2.0 doesn't ship with contrib.
+  pass
+# pylint: enable=g-import-not-at-top
 
 
 class DatasetBuilderTest(tf.test.TestCase):
@@ -42,7 +56,7 @@ class DatasetBuilderTest(tf.test.TestCase):
           tf.constant(additional_channels_tensor)).eval()
       for i in range(num_examples):
         features = {
-            'image/source_id': dataset_util.bytes_feature(str(i)),
+            'image/source_id': dataset_util.bytes_feature(str(i).encode()),
             'image/encoded': dataset_util.bytes_feature(encoded_jpeg),
             'image/format': dataset_util.bytes_feature('jpeg'.encode('utf8')),
             'image/height': dataset_util.int64_feature(4),
@@ -82,13 +96,13 @@ class DatasetBuilderTest(tf.test.TestCase):
     with tf.train.MonitoredSession() as sess:
       output_dict = sess.run(tensor_dict)
 
-    self.assertTrue(
-        fields.InputDataFields.groundtruth_instance_masks not in output_dict)
-    self.assertEquals((1, 4, 5, 3),
-                      output_dict[fields.InputDataFields.image].shape)
+    self.assertNotIn(
+        fields.InputDataFields.groundtruth_instance_masks, output_dict)
+    self.assertEqual((1, 4, 5, 3),
+                     output_dict[fields.InputDataFields.image].shape)
     self.assertAllEqual([[2]],
                         output_dict[fields.InputDataFields.groundtruth_classes])
-    self.assertEquals(
+    self.assertEqual(
         (1, 1, 4), output_dict[fields.InputDataFields.groundtruth_boxes].shape)
     self.assertAllEqual(
         [0.0, 0.0, 1.0, 1.0],
@@ -216,7 +230,7 @@ class DatasetBuilderTest(tf.test.TestCase):
       output_dict = sess.run(tensor_dict)
       self.assertAllEqual(['0'], output_dict[fields.InputDataFields.source_id])
       output_dict = sess.run(tensor_dict)
-      self.assertEquals(['1'], output_dict[fields.InputDataFields.source_id])
+      self.assertEqual([b'1'], output_dict[fields.InputDataFields.source_id])
 
   def test_sample_one_of_n_shards(self):
     tf_record_path = self.create_tf_record(num_examples=4)
@@ -236,9 +250,9 @@ class DatasetBuilderTest(tf.test.TestCase):
 
     with tf.train.MonitoredSession() as sess:
       output_dict = sess.run(tensor_dict)
-      self.assertAllEqual(['0'], output_dict[fields.InputDataFields.source_id])
+      self.assertAllEqual([b'0'], output_dict[fields.InputDataFields.source_id])
       output_dict = sess.run(tensor_dict)
-      self.assertEquals(['2'], output_dict[fields.InputDataFields.source_id])
+      self.assertEqual([b'2'], output_dict[fields.InputDataFields.source_id])
 
 
 class ReadDatasetTest(tf.test.TestCase):
@@ -258,6 +272,8 @@ class ReadDatasetTest(tf.test.TestCase):
       with tf.gfile.Open(path, 'wb') as f:
         f.write('\n'.join([str(i)] * 5))
 
+    super(ReadDatasetTest, self).setUp()
+
   def _get_dataset_next(self, files, config, batch_size):
 
     def decode_func(value):
@@ -272,8 +288,8 @@ class ReadDatasetTest(tf.test.TestCase):
   def test_make_initializable_iterator_with_hashTable(self):
     keys = [1, 0, -1]
     dataset = tf.data.Dataset.from_tensor_slices([[1, 2, -1, 5]])
-    table = tf.contrib.lookup.HashTable(
-        initializer=tf.contrib.lookup.KeyValueTensorInitializer(
+    table = contrib_lookup.HashTable(
+        initializer=contrib_lookup.KeyValueTensorInitializer(
             keys=keys, values=list(reversed(keys))),
         default_value=100)
     dataset = dataset.map(table.lookup)

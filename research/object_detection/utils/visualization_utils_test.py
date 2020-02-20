@@ -45,6 +45,7 @@ class VisualizationUtilsTest(tf.test.TestCase):
 
     # Show that with 34 colors, the closest prime number to 34/10 that
     # satisfies the constraints is 5.
+    default_standard_colors = visualization_utils.STANDARD_COLORS
     visualization_utils.STANDARD_COLORS = [
         'color_{}'.format(str(i)) for i in range(34)
     ]
@@ -58,6 +59,8 @@ class VisualizationUtilsTest(tf.test.TestCase):
     ]
     multiplier = visualization_utils._get_multiplier_for_color_randomness()
     self.assertEqual(13, multiplier)
+
+    visualization_utils.STANDARD_COLORS = default_standard_colors
 
   def create_colorful_test_image(self):
     """This function creates an image that can be used to test vis functions.
@@ -161,6 +164,7 @@ class VisualizationUtilsTest(tf.test.TestCase):
                            [[0.25, 0.25, 0.75, 0.75], [0.1, 0.3, 0.6, 1.0]]])
       classes = tf.constant([[1, 1], [1, 2]], dtype=tf.int64)
       scores = tf.constant([[0.8, 0.1], [0.6, 0.5]])
+      keypoint_edges = [(0, 1), (1, 2), (2, 3), (3, 0)]
       images_with_boxes = (
           visualization_utils.draw_bounding_boxes_on_image_tensors(
               images_tensor,
@@ -170,7 +174,8 @@ class VisualizationUtilsTest(tf.test.TestCase):
               category_index,
               original_image_spatial_shape=image_shape,
               true_image_shape=image_shape,
-              min_score_thresh=0.2))
+              min_score_thresh=0.2,
+              keypoint_edges=keypoint_edges))
 
       with self.test_session() as sess:
         sess.run(tf.global_variables_initializer())
@@ -297,8 +302,14 @@ class VisualizationUtilsTest(tf.test.TestCase):
     test_image = Image.fromarray(test_image)
     width_original, height_original = test_image.size
     keypoints = [[0.25, 0.75], [0.4, 0.6], [0.1, 0.1], [0.9, 0.9]]
+    keypoint_edges = [(0, 1), (1, 2), (2, 3), (3, 0)]
 
-    visualization_utils.draw_keypoints_on_image(test_image, keypoints)
+    visualization_utils.draw_keypoints_on_image(
+        test_image,
+        keypoints,
+        keypoint_edges=keypoint_edges,
+        keypoint_edge_width=1,
+        keypoint_edge_color='green')
     width_final, height_final = test_image.size
 
     self.assertEqual(width_original, width_final)
@@ -309,8 +320,14 @@ class VisualizationUtilsTest(tf.test.TestCase):
     width_original = test_image.shape[0]
     height_original = test_image.shape[1]
     keypoints = [[0.25, 0.75], [0.4, 0.6], [0.1, 0.1], [0.9, 0.9]]
+    keypoint_edges = [(0, 1), (1, 2), (2, 3), (3, 0)]
 
-    visualization_utils.draw_keypoints_on_image_array(test_image, keypoints)
+    visualization_utils.draw_keypoints_on_image_array(
+        test_image,
+        keypoints,
+        keypoint_edges=keypoint_edges,
+        keypoint_edge_width=1,
+        keypoint_edge_color='green')
     width_final = test_image.shape[0]
     height_final = test_image.shape[1]
 
@@ -445,6 +462,26 @@ class VisualizationUtilsTest(tf.test.TestCase):
       self.assertEqual(
           six.b(''),
           value_ops_out[metric_op_base + '/' + str(max_examples_to_draw - 1)])
+
+  def test_visualize_boxes_and_labels_on_image_array(self):
+    ori_image = np.ones([360, 480, 3], dtype=np.int32) * 255
+    test_image = np.ones([360, 480, 3], dtype=np.int32) * 255
+    detections = np.array([[0.8, 0.1, 0.9, 0.1, 1., 0.1],
+                           [0.1, 0.3, 0.8, 0.7, 1., 0.6]])
+    labelmap = {1: {'id': 1, 'name': 'cat'}, 2: {'id': 2, 'name': 'dog'}}
+    visualization_utils.visualize_boxes_and_labels_on_image_array(
+        test_image,
+        detections[:, :4],
+        detections[:, 4].astype(np.int32),
+        detections[:, 5],
+        labelmap,
+        track_ids=None,
+        use_normalized_coordinates=True,
+        max_boxes_to_draw=1,
+        min_score_thresh=0.2,
+        agnostic_mode=False,
+        line_thickness=8)
+    self.assertGreater(np.abs(np.sum(test_image - ori_image)), 0)
 
 
 if __name__ == '__main__':

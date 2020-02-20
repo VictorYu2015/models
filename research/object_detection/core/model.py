@@ -127,6 +127,25 @@ class DetectionModel(six.with_metaclass(abc.ABCMeta, _BaseClass)):
     """
     return field in self._groundtruth_lists
 
+  @staticmethod
+  def get_side_inputs(features):
+    """Get side inputs from input features.
+
+    This placeholder method provides a way for a meta-architecture to specify
+    how to grab additional side inputs from input features (in addition to the
+    image itself) and allows models to depend on contextual information.  By
+    default, detection models do not use side information (and thus this method
+    returns an empty dictionary by default.  However it can be overridden if
+    side inputs are necessary."
+
+    Args:
+      features: A dictionary of tensors.
+
+    Returns:
+      An empty dictionary by default.
+    """
+    return {}
+
   @abc.abstractmethod
   def preprocess(self, inputs):
     """Input preprocessing.
@@ -171,7 +190,7 @@ class DetectionModel(six.with_metaclass(abc.ABCMeta, _BaseClass)):
     pass
 
   @abc.abstractmethod
-  def predict(self, preprocessed_inputs, true_image_shapes):
+  def predict(self, preprocessed_inputs, true_image_shapes, **side_inputs):
     """Predict prediction tensors from inputs tensor.
 
     Outputs of this function can be passed to loss or postprocess functions.
@@ -183,6 +202,7 @@ class DetectionModel(six.with_metaclass(abc.ABCMeta, _BaseClass)):
         of the form [height, width, channels] indicating the shapes
         of true images in the resized images, as resized images can be padded
         with zeros.
+      **side_inputs: additional tensors that are required by the network.
 
     Returns:
       prediction_dict: a dictionary holding prediction tensors to be

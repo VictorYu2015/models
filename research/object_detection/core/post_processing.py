@@ -1013,7 +1013,7 @@ def batch_multiclass_non_max_suppression(boxes,
   else:
     ordered_additional_fields = collections.OrderedDict(
         sorted(additional_fields.items(), key=lambda item: item[0]))
-  del additional_fields
+
   with tf.name_scope(scope, 'BatchMultiClassNonMaxSuppression'):
     boxes_shape = boxes.shape
     batch_size = shape_utils.get_dim_as_int(boxes_shape[0])
